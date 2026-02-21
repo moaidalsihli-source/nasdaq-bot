@@ -1,4 +1,4 @@
-yfinance
 requests
-pytz
+yfinance
 pandas
+pytz
