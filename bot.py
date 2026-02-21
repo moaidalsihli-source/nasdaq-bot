@@ -15,13 +15,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(text):
+    print("Sending message...")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": text
     }
-    requests.post(url, data=payload)
-send_message("🚨 السبت - البوت شغال بنجاح")
+    r = requests.post(url, data=payload)
+    print(r.text)
+send_message("🚨 اختبار نهائي الآن")
 
 # ==============================
 # وقت الجلسة (السوق الأمريكي)
