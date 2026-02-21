@@ -6,6 +6,7 @@ import os
 import pytz
 from datetime import datetime, time as dtime
 print("Bot Started Successfully")
+send_message("🚨 تنبيه رقم 1 اليوم\n🔸 TEST\n💰 السعر -> 1.00$ (+5%)")
 
 # ==============================
 # إعدادات تيليجرام
