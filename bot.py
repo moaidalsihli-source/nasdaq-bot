@@ -5,6 +5,7 @@ import time
 import os
 import pytz
 from datetime import datetime, time as dtime
+print("Bot Started Successfully")
 
 # ==============================
 # إعدادات تيليجرام
@@ -131,6 +132,7 @@ def check_stocks():
 # ==============================
 
 while True:
+    print("Bot is running...")
     if is_trading_session():
         check_stocks()
         time.sleep(20)
