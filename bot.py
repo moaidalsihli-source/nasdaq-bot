@@ -6,7 +6,6 @@ import os
 import pytz
 from datetime import datetime, time as dtime
 print("Bot Started Successfully")
-send_message("🚨 اختبار السبت - البوت شغال بنجاح ✅")
 
 # ==============================
 # إعدادات تيليجرام
@@ -22,6 +21,7 @@ def send_message(text):
         "text": text
     }
     requests.post(url, data=payload)
+send_message("🚨 السبت - البوت شغال بنجاح")
 
 # ==============================
 # وقت الجلسة (السوق الأمريكي)
