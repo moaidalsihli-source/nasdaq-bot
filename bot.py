@@ -9,25 +9,13 @@ from datetime import datetime
 # =========================
 MIN_PRICE = 0.06
 MAX_PRICE = 10
-STEP = 3
+STEP = 2
 BATCH_SIZE = 120
-VOLUME_MULTIPLIER = 2
 ny = pytz.timezone("America/New_York")
 memory = {}
 
-print("🚀 Mod F-15 ELITE LOADED")
-
 # =========================
-# وقت العمل
-# =========================
-def allowed_time():
-    now = datetime.now(ny)
-    if now.weekday() >= 5:
-        return False
-    return 4 <= now.hour < 20
-
-# =========================
-# تحميل شركات ناسداك الحقيقية
+# تحميل شركات ناسداك
 # =========================
 def get_nasdaq_symbols():
     url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
@@ -43,7 +31,7 @@ def scan(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
 
-        if data.empty or len(data) < 6:
+        if data.empty:
             return
 
         open_price = data["Open"].iloc[0]
@@ -53,17 +41,8 @@ def scan(symbol):
             return
 
         change = ((current_price - open_price) / open_price) * 100
+
         if abs(change) < STEP:
-            return
-
-        # ===== الفوليوم =====
-        vol_1m = int(data["Volume"].iloc[-1])
-        vol_2m = int(data["Volume"].iloc[-2:].sum())
-        vol_5m_total = int(data["Volume"].iloc[-5:].sum())
-        vol_5m_avg = vol_5m_total / 5
-
-        # فلتر انفجار فوليوم
-        if vol_1m < vol_5m_avg * VOLUME_MULTIPLIER:
             return
 
         level = int(abs(change) // STEP) * STEP
@@ -75,21 +54,35 @@ def scan(symbol):
         if level not in memory[symbol]:
             memory[symbol].append(level)
 
+            # ===== Volume مع حماية =====
+            try:
+                vol_1m = int(data["Volume"].iloc[-1])
+            except:
+                vol_1m = 0
+
+            try:
+                vol_2m = int(data["Volume"].iloc[-2:].sum())
+            except:
+                vol_2m = 0
+
+            try:
+                vol_5m = int(data["Volume"].iloc[-5:].sum())
+            except:
+                vol_5m = 0
+
             print(f"""
-🚀 Mod F-15 ELITE
+Mod F-15
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه مستوى {level}%
-⚡️ انفجار فوليوم
 {direction}
 
-💰 بدأ من -> {open_price:.4f}$
 📍 الآن -> {current_price:.4f}$
 📈 نسبة التغير -> {change:+.2f}%
 
 📊 1m Vol -> {vol_1m:,}
 📊 2m Vol -> {vol_2m:,}
-📊 5m Avg -> {int(vol_5m_avg):,}
+📊 5m Vol -> {vol_5m:,}
 
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
@@ -102,30 +95,16 @@ def scan(symbol):
 # =========================
 def main():
 
-    start_time = datetime.now(ny).strftime('%I:%M:%S %p NY')
-
-    print(f"""
-👑 Mod F-15 ELITE
-
-📡 النظام بدأ الآن
-🕒 {start_time}
-
-📊 فلتر السعر: {MIN_PRICE}$ → {MAX_PRICE}$
-📈 تنبيه كل {STEP}%
-⚡ فلتر انفجار فوليوم مفعل
-""")
-
+    print("🚀 BOT STARTED NOW")
+    print(f"🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}")
     print("📊 تحميل شركات ناسداك...")
+
     symbols = get_nasdaq_symbols()
-    print(f"✅ تم تحميل {len(symbols)} شركة (3 و 4 أحرف)")
+    print(f"✅ تم تحميل {len(symbols)} شركة")
 
     index = 0
 
     while True:
-
-        if not allowed_time():
-            time.sleep(30)
-            continue
 
         batch = symbols[index:index+BATCH_SIZE]
 
