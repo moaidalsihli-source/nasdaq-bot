@@ -1,215 +1,128 @@
-import os
-import requests
 import yfinance as yf
-import pandas as pd
-import pytz
 import time
+import pytz
 from datetime import datetime
+import string
 
-# =============================
-# ENV
-# =============================
-
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-
-if not TOKEN or not CHAT_ID:
-    print("❌ TOKEN OR CHAT_ID NOT FOUND!")
-    exit()
+MIN_STOCK_PRICE = 0.20
+MAX_STOCK_PRICE = 10
 
 ny = pytz.timezone("America/New_York")
+stock_alert_count = {}
 
-last_alert_time = 0
-ALERT_INTERVAL = 30
+print("🚀 Mod F-15 SMART SCANNER STARTED")
 
-option_levels = {}
+# =========================
+# توليد رموز 1-4 أحرف
+# =========================
+def generate_symbols():
+    letters = string.ascii_uppercase
+    symbols = []
 
-# =============================
-# TELEGRAM
-# =============================
+    # 1 حرف
+    for a in letters:
+        symbols.append(a)
 
-def send_message(text):
-    global last_alert_time
-    now = time.time()
+    # 2 حروف
+    for a in letters:
+        for b in letters:
+            symbols.append(a+b)
 
-    if now - last_alert_time < ALERT_INTERVAL:
-        return
+    # 3 حروف
+    for a in letters:
+        for b in letters:
+            for c in letters:
+                symbols.append(a+b+c)
 
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text}
-        )
-        last_alert_time = now
-    except Exception as e:
-        print("Telegram Error:", e)
+    # 4 حروف
+    for a in letters:
+        for b in letters:
+            for c in letters:
+                for d in letters:
+                    symbols.append(a+b+c+d)
 
-# =============================
-# MARKET TIME
-# =============================
+    return symbols
 
-def market_is_open():
+
+# =========================
+def is_extended_market():
     now = datetime.now(ny)
     if now.weekday() >= 5:
         return False
-    minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960  # 9:30 - 16:00 NY
+    return 4 <= now.hour < 20
 
-# =============================
-# NASDAQ LIST
-# =============================
 
-def get_nasdaq():
-    url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
-    df = pd.read_csv(url, sep="|")
-    df = df[df["Test Issue"] == "N"]
-    df = df[df["ETF"] == "N"]
-    return df["Symbol"].tolist()
-
-print("🚀 BOT STARTED NOW")
-send_message("🚀 BOT STARTED NOW")
-
-all_tickers = get_nasdaq()
-ticker_index = 0
-
-# =============================
-# MAIN LOOP
-# =============================
-
-while True:
-
-    ticker = all_tickers[ticker_index]
-    ticker_index = (ticker_index + 1) % len(all_tickers)
-
+# =========================
+def scan_stock(symbol):
     try:
-        data = yf.download(ticker, period="1d", interval="1m", progress=False)
+        data = yf.Ticker(symbol).history(period="1d", interval="1m")
 
-        if len(data) < 10:
-            time.sleep(1)
+        if data.empty or len(data) < 25:
+            return
+
+        price_now = data["Close"].iloc[-1]
+        price_5min = data["Close"].iloc[-6]
+
+        change_5min = ((price_now - price_5min) / price_5min) * 100
+
+        volume_now = data["Volume"].iloc[-1]
+        avg_volume = data["Volume"].rolling(20).mean().iloc[-1]
+
+        if not (MIN_STOCK_PRICE <= price_now <= MAX_STOCK_PRICE):
+            return
+
+        if change_5min >= 1 and volume_now > avg_volume:
+
+            count = stock_alert_count.get(symbol, 0) + 1
+            stock_alert_count[symbol] = count
+
+            print(f"""
+Mod F-15
+
+🔸 {symbol}
+🚨 Alert #{count}
+🟢 Early Momentum
+
+📍 Price -> {price_now:.2f}$
+📈 5min Move -> {change_5min:.2f}%
+📊 Volume Surge
+
+🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
+""")
+
+    except:
+        return
+
+
+# =========================
+def main():
+    symbols = generate_symbols()
+    total = len(symbols)
+    print(f"Generated {total} symbols")
+
+    index = 0
+
+    while True:
+
+        if not is_extended_market():
+            time.sleep(60)
             continue
 
-        price = data["Close"].iloc[-1]
-        open_price = data["Open"].iloc[0]
+        print("⏱ New 60-stock batch")
 
-        if open_price == 0:
-            time.sleep(1)
-            continue
+        batch = symbols[index:index+60]
 
-        change = ((price - open_price) / open_price) * 100
-        accel = ((price - data["Close"].iloc[-4]) / data["Close"].iloc[-4]) * 100
+        for symbol in batch:
+            scan_stock(symbol)
+            time.sleep(0.3)
 
-        vol_1m = data["Volume"].iloc[-1]
-        vol_2m = data["Volume"].tail(2).sum()
-        vol_5m = data["Volume"].tail(5).sum()
+        index += 60
 
-        # =============================
-        # STOCK FILTER (0.07 - 20$)
-        # =============================
+        if index >= total:
+            index = 0  # يرجع من البداية
 
-        if 0.07 <= price <= 20 and abs(change) >= 3:
+        time.sleep(60)
 
-            # Momentum classification
-            if change >= 12:
-                momentum = "🔥 Explosive"
-            elif change >= 8:
-                momentum = "🚀 Powerful Move"
-            elif change >= 5:
-                momentum = "🟢 Strong Momentum"
-            elif change >= 3:
-                momentum = "⚠️ Momentum"
-            elif change <= -8:
-                momentum = "💣 Heavy Selloff"
-            elif change <= -3:
-                momentum = "🔻 Bearish Pressure"
-            else:
-                momentum = ""
 
-            direction = "🟢" if change > 0 else "🔴"
-            header = "BREAKOUT" if change > 0 else "BREAKDOWN"
-
-            message = f"""
-🔸 {ticker}
-{direction} STOCK {header}
-
-💰 Price: {round(price,2)}$
-📈 Move: {round(change,2)}%
-⚡ 3m Accel: {round(accel,2)}%
-
-📊 1m Vol: {int(vol_1m):,}
-📊 2m Vol: {int(vol_2m):,}
-📊 5m Vol: {int(vol_5m):,}
-
-🎯 {momentum}
-🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
-"""
-            send_message(message)
-
-        # =============================
-        # OPTIONS (MARKET HOURS ONLY)
-        # =============================
-
-        if market_is_open():
-
-            stock = yf.Ticker(ticker)
-
-            for exp in stock.options:
-
-                opt_chain = stock.option_chain(exp)
-
-                for opt_type, df_opt in [("CALL", opt_chain.calls), ("PUT", opt_chain.puts)]:
-
-                    for _, row in df_opt.iterrows():
-
-                        strike = row["strike"]
-                        last_price = row["lastPrice"]
-                        volume = row["volume"]
-                        oi = row["openInterest"]
-
-                        if last_price is None:
-                            continue
-
-                        if not (0.05 <= last_price <= 0.50):
-                            continue
-
-                        if strike > 100:
-                            continue
-
-                        if volume is None or volume < 5000:
-                            continue
-
-                        if oi is None or oi < 3000:
-                            continue
-
-                        key = f"{ticker}_{strike}_{exp}_{opt_type}"
-
-                        if key not in option_levels:
-                            option_levels[key] = last_price
-                            continue
-
-                        entry = option_levels[key]
-                        gain = ((last_price - entry) / entry) * 100
-
-                        if gain >= 25:
-
-                            direction = "🟢" if opt_type == "CALL" else "🔴"
-
-                            message = f"""
-🔸 {ticker}
-{direction} {opt_type} OPTION LEVEL HIT
-
-📅 Exp: {exp}
-📌 Strike: {strike}
-💲 Entry: {round(entry,2)}
-💲 Current: {round(last_price,2)}
-🚀 +{round(gain,1)}%
-
-🔥 Option Volume: {int(volume)}
-🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
-"""
-                            send_message(message)
-                            option_levels[key] = last_price
-
-    except Exception as e:
-        print("Error:", e)
-
-    time.sleep(1)
+if __name__ == "__main__":
+    main()
