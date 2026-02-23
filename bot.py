@@ -2,20 +2,22 @@ import yfinance as yf
 import time
 import pytz
 from datetime import datetime
+import string
 
 # =========================
 # إعدادات
 # =========================
 MIN_PRICE = 0.06
 MAX_PRICE = 10
-STEP = 3  # كل 3%
+STEP = 3
+BATCH_SIZE = 100   # يفحص 100 كل 10 ثواني
+TOTAL_SYMBOLS = 1000
+
 ny = pytz.timezone("America/New_York")
 memory = {}
 
-print("🚀 Mod F-15 NASDAQ PENNY MOMENTUM LOADED")
+print("🚀 Mod F-15 NASDAQ 1000 LOADED")
 
-# =========================
-# وقت العمل (4AM → 8PM NY)
 # =========================
 def allowed_time():
     now = datetime.now(ny)
@@ -24,17 +26,34 @@ def allowed_time():
     return 4 <= now.hour < 20
 
 # =========================
-# قائمة ناسداك (يمكنك تكبيرها)
+# توليد 1000 رمز (1–4 حروف)
 # =========================
-def get_nasdaq_symbols():
-    return [
-        "SIRI","LCID","RIVN","NKLA","HOOD","PLTR","SOFI","NIO","XPEV","BB",
-        "CENN","FFIE","MULN","GME","AMC","RIOT","MARA","TTOO","IDEX","SNDL",
-        "AAPL","MSFT","NVDA","AMD","TSLA"
-    ]
+def generate_symbols(limit=1000):
+    letters = string.ascii_uppercase
+    symbols = []
 
-# =========================
-# فحص الزخم
+    for a in letters:
+        symbols.append(a)
+
+    for a in letters:
+        for b in letters:
+            symbols.append(a+b)
+
+    for a in letters:
+        for b in letters:
+            for c in letters:
+                symbols.append(a+b+c)
+
+    for a in letters:
+        for b in letters:
+            for c in letters:
+                for d in letters:
+                    symbols.append(a+b+c+d)
+                    if len(symbols) >= limit:
+                        return symbols
+
+    return symbols
+
 # =========================
 def scan(symbol):
     try:
@@ -46,7 +65,6 @@ def scan(symbol):
         open_price = data["Open"].iloc[0]
         current_price = data["Close"].iloc[-1]
 
-        # فلتر السعر
         if not (MIN_PRICE <= current_price <= MAX_PRICE):
             return
 
@@ -64,10 +82,6 @@ def scan(symbol):
         if level not in memory[symbol]:
             memory[symbol].append(level)
 
-            vol_1m = int(data["Volume"].iloc[-1])
-            vol_2m = int(data["Volume"].iloc[-2:].sum())
-            vol_5m = int(data["Volume"].iloc[-5:].sum())
-
             print(f"""
 Mod F-15
 
@@ -76,13 +90,8 @@ Mod F-15
 ⚪️ الإشارة -> زخم
 {direction}
 
-💰 بدأ من -> {open_price:.4f}$
 📍 الآن -> {current_price:.4f}$
 📈 نسبة التغير -> {change:+.2f}%
-
-📊 1m Vol -> {vol_1m:,}
-📊 2m Vol -> {vol_2m:,}
-📊 5m Vol -> {vol_5m:,}
 
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
@@ -91,31 +100,35 @@ Mod F-15
         pass
 
 # =========================
-# التشغيل الرئيسي
-# =========================
 def main():
 
     print(f"""
 🚀 Mod F-15
 
 📡 بدأ الآن
-📊 فلتر السعر: {MIN_PRICE}$ → {MAX_PRICE}$
+📊 يفحص {TOTAL_SYMBOLS} سهم
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
 
-    symbols = get_nasdaq_symbols()
+    symbols = generate_symbols(TOTAL_SYMBOLS)
+    index = 0
 
     while True:
 
         if not allowed_time():
-            time.sleep(60)
+            time.sleep(30)
             continue
 
-        for s in symbols:
-            scan(s)
-            time.sleep(1)
+        batch = symbols[index:index+BATCH_SIZE]
 
-        time.sleep(30)
+        for s in batch:
+            scan(s)
+
+        index += BATCH_SIZE
+        if index >= len(symbols):
+            index = 0
+
+        time.sleep(10)  # كل 10 ثواني ينتقل لدفعة جديدة
 
 if __name__ == "__main__":
     main()
