@@ -10,14 +10,15 @@ from datetime import datetime
 MIN_PRICE = 0.06
 MAX_PRICE = 10
 STEP = 3
-BATCH_SIZE = 150
+BATCH_SIZE = 120
+VOLUME_MULTIPLIER = 2
 ny = pytz.timezone("America/New_York")
 memory = {}
 
-print("🚀 Mod F-15 PRO NASDAQ + VOLUME LOADED")
+print("🚀 Mod F-15 ELITE LOADED")
 
 # =========================
-# وقت العمل (4AM → 8PM NY)
+# وقت العمل
 # =========================
 def allowed_time():
     now = datetime.now(ny)
@@ -29,15 +30,10 @@ def allowed_time():
 # تحميل شركات ناسداك الحقيقية
 # =========================
 def get_nasdaq_symbols():
-
     url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
     df = pd.read_csv(url, sep="|")
-
     symbols = df["Symbol"].tolist()
-
-    # فلتر 3 و 4 أحرف فقط
     symbols = [s for s in symbols if len(s) in [3,4]]
-
     return symbols
 
 # =========================
@@ -57,8 +53,17 @@ def scan(symbol):
             return
 
         change = ((current_price - open_price) / open_price) * 100
-
         if abs(change) < STEP:
+            return
+
+        # ===== الفوليوم =====
+        vol_1m = int(data["Volume"].iloc[-1])
+        vol_2m = int(data["Volume"].iloc[-2:].sum())
+        vol_5m_total = int(data["Volume"].iloc[-5:].sum())
+        vol_5m_avg = vol_5m_total / 5
+
+        # فلتر انفجار فوليوم
+        if vol_1m < vol_5m_avg * VOLUME_MULTIPLIER:
             return
 
         level = int(abs(change) // STEP) * STEP
@@ -70,17 +75,12 @@ def scan(symbol):
         if level not in memory[symbol]:
             memory[symbol].append(level)
 
-            # ===== حساب الفوليوم =====
-            vol_1m = int(data["Volume"].iloc[-1])
-            vol_2m = int(data["Volume"].iloc[-2:].sum())
-            vol_5m = int(data["Volume"].iloc[-5:].sum())
-
             print(f"""
-Mod F-15 PRO
+🚀 Mod F-15 ELITE
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه مستوى {level}%
-⚪️ الإشارة -> زخم
+⚡️ انفجار فوليوم
 {direction}
 
 💰 بدأ من -> {open_price:.4f}$
@@ -89,7 +89,7 @@ Mod F-15 PRO
 
 📊 1m Vol -> {vol_1m:,}
 📊 2m Vol -> {vol_2m:,}
-📊 5m Vol -> {vol_5m:,}
+📊 5m Avg -> {int(vol_5m_avg):,}
 
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
@@ -102,16 +102,22 @@ Mod F-15 PRO
 # =========================
 def main():
 
-    print(f"""
-🚀 Mod F-15 PRO
+    start_time = datetime.now(ny).strftime('%I:%M:%S %p NY')
 
-📡 بدأ الآن
-📊 تحميل شركات ناسداك...
-🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
+    print(f"""
+👑 Mod F-15 ELITE
+
+📡 النظام بدأ الآن
+🕒 {start_time}
+
+📊 فلتر السعر: {MIN_PRICE}$ → {MAX_PRICE}$
+📈 تنبيه كل {STEP}%
+⚡ فلتر انفجار فوليوم مفعل
 """)
 
+    print("📊 تحميل شركات ناسداك...")
     symbols = get_nasdaq_symbols()
-    print(f"📊 تم تحميل {len(symbols)} شركة (3 و 4 أحرف)")
+    print(f"✅ تم تحميل {len(symbols)} شركة (3 و 4 أحرف)")
 
     index = 0
 
