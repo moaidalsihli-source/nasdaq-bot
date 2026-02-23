@@ -5,7 +5,7 @@ import pandas as pd
 import pytz
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -31,11 +31,11 @@ MAX_PRICE = 15
 LEVEL_PERCENT = 3
 DELAY = 1
 OPTION_INTERVAL = 60
-
 OPTION_LEVELS = [25, 50, 100, 200, 400]
 
 bad_tickers = set()
 option_memory = {}
+last_alert_time_stock = {}
 last_option_scan = 0
 
 # ==============================
@@ -69,11 +69,9 @@ def market_open():
 def get_nasdaq_4():
     url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     df = pd.read_csv(url, sep="|")
-
     df = df[df["Test Issue"] == "N"]
     df = df[df["ETF"] == "N"]
     df = df[df["Symbol"].str.match(r"^[A-Z]{4}$")]
-
     return df["Symbol"].tolist()
 
 # ==============================
@@ -85,6 +83,10 @@ def scan_stock(ticker):
     if ticker in bad_tickers:
         return
 
+    if ticker in last_alert_time_stock:
+        if datetime.now() - last_alert_time_stock[ticker] < timedelta(minutes=10):
+            return
+
     try:
         data = yf.download(
             ticker,
@@ -94,7 +96,7 @@ def scan_stock(ticker):
             threads=False
         )
 
-        if data.empty or len(data) < 10:
+        if data.empty or len(data) < 20:
             bad_tickers.add(ticker)
             return
 
@@ -105,36 +107,51 @@ def scan_stock(ticker):
             return
 
         daily_change = ((price - open_price) / open_price) * 100
-        price_3m_ago = float(data["Close"].iloc[-3])
-        accel_3m = ((price - price_3m_ago) / price_3m_ago) * 100
 
-        vol_1m = int(data["Volume"].iloc[-1])
-        vol_2m = int(data["Volume"].iloc[-2:].sum())
-        vol_5m = int(data["Volume"].iloc[-5:].sum())
+        data["EMA9"] = data["Close"].ewm(span=9).mean()
+        data["EMA20"] = data["Close"].ewm(span=20).mean()
 
-        if abs(daily_change) >= LEVEL_PERCENT and abs(accel_3m) >= 0.5:
+        ema9 = float(data["EMA9"].iloc[-1])
+        ema20 = float(data["EMA20"].iloc[-1])
 
-            direction = "🟢 صاعد" if daily_change > 0 else "🔴 هابط"
+        data["VWAP"] = (data["Close"] * data["Volume"]).cumsum() / data["Volume"].cumsum()
+        vwap = float(data["VWAP"].iloc[-1])
+
+        vol_now = int(data["Volume"].iloc[-1])
+        avg_vol = int(data["Volume"].iloc[-20:].mean())
+
+        if avg_vol == 0:
+            return
+
+        volume_spike = vol_now > avg_vol * 2
+
+        trend_up = ema9 > ema20 and price > vwap
+        trend_down = ema9 < ema20 and price < vwap
+
+        if abs(daily_change) >= LEVEL_PERCENT and volume_spike:
+
+            if daily_change > 0 and trend_up:
+                direction = "🟢 صاعد قوي"
+            elif daily_change < 0 and trend_down:
+                direction = "🔴 هابط قوي"
+            else:
+                return
 
             message = f"""
-🔸 الرمز -> {ticker}
-🚨 تنبيه زخم
+🔸 {ticker}
+🚨 Institutional Momentum
 
 📈 الاتجاه -> {direction}
 💰 السعر -> {round(price,2)}$ ({round(daily_change,2)}%)
 
-🚀 بدأ من -> {round(price_3m_ago,2)}$
-⚡ تسارع 3m -> {round(accel_3m,2)}%
+🔥 Volume Spike x{round(vol_now/avg_vol,1)}
+📊 EMA9 > EMA20: {ema9 > ema20}
+📊 Above VWAP: {price > vwap}
 
-📊 الفوليوم ->
-1m: {vol_1m:,}
-2m: {vol_2m:,}
-5m: {vol_5m:,}
-
-🎯 Level {LEVEL_PERCENT}%
 🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
 """
             send_message(message)
+            last_alert_time_stock[ticker] = datetime.now()
 
     except:
         bad_tickers.add(ticker)
@@ -194,16 +211,14 @@ def scan_options(ticker):
 🔸 {ticker}
 {direction} {opt_type} OPTION
 
-📅 Exp: {exp}
 📌 Strike: {strike}
-
 💲 Entry: {round(entry,2)}
 💲 Current: {round(float(last_price),2)}
 
 🚀 +{level}% HIT
-📈 Current Gain: +{round(gain,1)}%
+📈 Gain: +{round(gain,1)}%
+🔥 Volume: {int(volume):,}
 
-🔥 Option Volume: {int(volume):,}
 🕒 {datetime.now(ny).strftime("%I:%M %p")} NY
 """
                             send_message(message)
@@ -216,8 +231,8 @@ def scan_options(ticker):
 # START
 # ==============================
 
-print("🚀 BOT STARTED")
-send_message("🚀 NASDAQ SCANNER STARTED")
+print("🚀 ELITE NASDAQ SCANNER STARTED")
+send_message("🚀 ELITE NASDAQ SCANNER STARTED")
 
 tickers = get_nasdaq_4()
 stock_index = 0
