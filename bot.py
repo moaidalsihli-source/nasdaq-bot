@@ -26,8 +26,8 @@ ny = pytz.timezone("America/New_York")
 # SETTINGS
 # ==============================
 
-MIN_PRICE = 0.07
-MAX_PRICE = 15
+MIN_PRICE = 0.20
+MAX_PRICE = 10
 DELAY = 1
 OPTION_INTERVAL = 60
 
