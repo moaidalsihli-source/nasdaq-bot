@@ -20,8 +20,6 @@ def send_message(text):
 
 ny = pytz.timezone("America/New_York")
 
-levels = [5, 10, 20, 50, 70, 100]
-
 # تحميل قائمة ناسداك
 tickers = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
@@ -44,7 +42,7 @@ def get_session_label(now):
         return "🌙 Extended Hours"
 
 # ==============================
-# فحص السيولة
+# فحص السيولة (3% وفوق)
 # ==============================
 
 def check_liquidity_stock(ticker, now):
@@ -64,14 +62,11 @@ def check_liquidity_stock(ticker, now):
         change_percent = ((price - open_price) / open_price) * 100
         abs_change = abs(change_percent)
 
-        current_level = None
-        for lvl in levels:
-            if abs_change >= lvl:
-                current_level = lvl
-
-        if current_level is None:
+        # شرط 3% وفوق
+        if abs_change < 3:
             return None
 
+        # الفوليوم
         vol_1m = data["Volume"].iloc[0]
         vol_2m = data["Volume"].iloc[:2].sum()
         vol_5m = data["Volume"].iloc[:5].sum()
@@ -89,10 +84,9 @@ def check_liquidity_stock(ticker, now):
         session = get_session_label(now)
 
         message = (
-            f"\n🚨 تنبيه سيولة احترافي\n"
+            f"\n🚨 تنبيه سيولة\n"
             f"{session}\n"
             f"🔸 {ticker}\n"
-            f"⚡️ مستوى {current_level}%+\n"
             f"{direction}\n"
             f"💰 السعر: {round(price,2)}$\n"
             f"📊 التغير: {round(change_percent,2)}%\n\n"
@@ -112,7 +106,7 @@ def check_liquidity_stock(ticker, now):
 # الحلقة الرئيسية (24 ساعة)
 # ==============================
 
-send_message("🚀 البوت بدأ الآن ويعمل 24 ساعة")
+send_message("🚀 البوت بدأ — فلترة 3%+")
 
 while True:
     now = datetime.now(ny)
@@ -129,4 +123,4 @@ while True:
         send_message(msg)
         time.sleep(35)  # انتظار بعد التنبيه
     else:
-        time.sleep(1)   # انتظار بسيط بين الفحص
+        time.sleep(1)   # انتظار بسيط
