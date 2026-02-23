@@ -30,11 +30,11 @@ MIN_PRICE = 0.07
 MAX_PRICE = 15
 LEVEL_PERCENT = 3
 DELAY = 1
-OPTION_SCAN_INTERVAL = 60  # كل دقيقة
+OPTION_INTERVAL = 60
 
-last_option_scan = 0
 last_alert_time = 0
-ALERT_INTERVAL = 3
+ALERT_COOLDOWN = 2
+last_option_scan = 0
 
 bad_tickers = set()
 option_memory = {}
@@ -47,7 +47,7 @@ def send_message(text):
     global last_alert_time
     now = time.time()
 
-    if now - last_alert_time < ALERT_INTERVAL:
+    if now - last_alert_time < ALERT_COOLDOWN:
         return
 
     try:
@@ -71,7 +71,7 @@ def market_open():
     return 570 <= minutes <= 960  # 9:30 - 16:00
 
 # ==============================
-# NASDAQ 4 LETTER ONLY
+# NASDAQ 4 LETTER
 # ==============================
 
 def get_nasdaq_4():
@@ -80,7 +80,7 @@ def get_nasdaq_4():
 
     df = df[df["Test Issue"] == "N"]
     df = df[df["ETF"] == "N"]
-    df = df[df["Symbol"].str.match(r"^[A-Z]{4}$")]  # 4 حروف فقط
+    df = df[df["Symbol"].str.match(r"^[A-Z]{4}$")]
 
     return df["Symbol"].tolist()
 
@@ -113,7 +113,6 @@ def scan_stock(ticker):
             return
 
         change = ((price - open_price) / open_price) * 100
-
         accel_3m = ((data["Close"].iloc[-1] - data["Close"].iloc[-3]) /
                     data["Close"].iloc[-3]) * 100
 
@@ -146,7 +145,7 @@ def scan_stock(ticker):
         bad_tickers.add(ticker)
 
 # ==============================
-# OPTION SCAN (كل دقيقة)
+# OPTION SCAN
 # ==============================
 
 def scan_options(ticker):
@@ -216,21 +215,42 @@ def scan_options(ticker):
 # ==============================
 
 print("🚀 BOT STARTED")
+
+send_message(f"""
+🚀 NASDAQ SCANNER STARTED
+
+📊 4 Letter Stocks Only
+💰 Range: 0.07$ - 15$
+🎯 Level: {LEVEL_PERCENT}%
+⚙ Stock Scan: 1 per second
+📈 Option Scan: 1 per minute (Market Hours)
+
+🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
+""")
+
 tickers = get_nasdaq_4()
-index = 0
+stock_index = 0
+option_index = 0
 
 while True:
 
-    ticker = tickers[index]
-    index += 1
-
-    if index >= len(tickers):
-        index = 0
+    # ---- STOCK (1 كل 1 ثانية)
+    ticker = tickers[stock_index]
+    stock_index += 1
+    if stock_index >= len(tickers):
+        stock_index = 0
 
     scan_stock(ticker)
 
-    if time.time() - last_option_scan >= OPTION_SCAN_INTERVAL:
-        scan_options(ticker)
+    # ---- OPTION (كل دقيقة)
+    if market_open() and time.time() - last_option_scan >= OPTION_INTERVAL:
+
+        opt_ticker = tickers[option_index]
+        option_index += 1
+        if option_index >= len(tickers):
+            option_index = 0
+
+        scan_options(opt_ticker)
         last_option_scan = time.time()
 
     time.sleep(DELAY)
