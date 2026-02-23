@@ -4,18 +4,34 @@ import pytz
 from datetime import datetime
 import string
 
-MIN_STOCK_PRICE = 0.20
-MAX_STOCK_PRICE = 10
+# =========================
+# SETTINGS
+# =========================
+MIN_OPTION_PRICE = 0.15
+MAX_OPTION_PRICE = 0.60
+
+OPTION_LEVELS = [5,10,20,30,40,50,75,100,150,200,300,400,500,750,1000]
 
 ny = pytz.timezone("America/New_York")
-stock_alert_count = {}
 
-print("🚀 Mod F-15 SMART SCANNER STARTED")
+option_memory = {}
+
+print("🚀 Mod F-15 GLOBAL OPTIONS STARTED")
 
 # =========================
-# توليد رموز 1-4 أحرف
+# وقت السوق الرسمي فقط
 # =========================
-def generate_symbols():
+def is_regular_market():
+    now = datetime.now(ny)
+    if now.weekday() >= 5:
+        return False
+    return (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16
+
+
+# =========================
+# توليد رموز 1–4 أحرف
+# =========================
+def generate_symbols(limit=5000):
     letters = string.ascii_uppercase
     symbols = []
 
@@ -41,70 +57,95 @@ def generate_symbols():
                 for d in letters:
                     symbols.append(a+b+c+d)
 
+                    if len(symbols) >= limit:
+                        return symbols
+
     return symbols
 
 
 # =========================
-def is_extended_market():
-    now = datetime.now(ny)
-    if now.weekday() >= 5:
-        return False
-    return 4 <= now.hour < 20
-
-
+# فحص العقود
 # =========================
-def scan_stock(symbol):
+def scan_options(symbol):
+
+    if not is_regular_market():
+        return
+
     try:
-        data = yf.Ticker(symbol).history(period="1d", interval="1m")
+        ticker = yf.Ticker(symbol)
 
-        if data.empty or len(data) < 25:
+        expirations = ticker.options
+        if not expirations:
             return
 
-        price_now = data["Close"].iloc[-1]
-        price_5min = data["Close"].iloc[-6]
+        exp = expirations[0]  # أول تاريخ فقط لتخفيف الضغط
+        chain = ticker.option_chain(exp)
 
-        change_5min = ((price_now - price_5min) / price_5min) * 100
+        calls = chain.calls
 
-        volume_now = data["Volume"].iloc[-1]
-        avg_volume = data["Volume"].rolling(20).mean().iloc[-1]
+        for _, row in calls.iterrows():
 
-        if not (MIN_STOCK_PRICE <= price_now <= MAX_STOCK_PRICE):
-            return
+            price = row["lastPrice"]
+            strike = row["strike"]
+            volume = row["volume"]
 
-        if change_5min >= 1 and volume_now > avg_volume:
+            if price is None:
+                continue
 
-            count = stock_alert_count.get(symbol, 0) + 1
-            stock_alert_count[symbol] = count
+            if not (MIN_OPTION_PRICE <= price <= MAX_OPTION_PRICE):
+                continue
 
-            print(f"""
-Mod F-15
+            key = f"{symbol}_{strike}_{exp}"
 
-🔸 {symbol}
-🚨 Alert #{count}
-🟢 Early Momentum
+            if key not in option_memory:
+                option_memory[key] = {
+                    "entry": price,
+                    "levels_hit": []
+                }
 
-📍 Price -> {price_now:.2f}$
-📈 5min Move -> {change_5min:.2f}%
-📊 Volume Surge
+            entry = option_memory[key]["entry"]
+            gain = ((price - entry) / entry) * 100
 
+            for lvl in OPTION_LEVELS:
+                if gain >= lvl and lvl not in option_memory[key]["levels_hit"]:
+
+                    option_memory[key]["levels_hit"].append(lvl)
+
+                    print(f"""
+Mod F-15 OPTIONS
+
+🔸 الرمز -> {symbol}
+🟢 CALL OPTION LEVEL HIT
+
+📅 تاريخ العقد -> {exp}
+📌 Strike -> {strike}
+
+💲 دخول -> {entry:.2f}$
+💲 الآن -> {price:.2f}$
+🚀 نسبة الربح -> +{gain:.0f}%
+
+🔥 حجم العقود -> {int(volume) if volume else 0:,}
 🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
 """)
 
     except:
-        return
+        pass
 
 
 # =========================
+# MAIN LOOP (60 شركة كل دقيقة)
+# =========================
 def main():
-    symbols = generate_symbols()
-    total = len(symbols)
-    print(f"Generated {total} symbols")
+
+    symbols = generate_symbols(5000)
+    print(f"Generated {len(symbols)} symbols")
 
     index = 0
+    total = len(symbols)
 
     while True:
 
-        if not is_extended_market():
+        if not is_regular_market():
             time.sleep(60)
             continue
 
@@ -113,13 +154,12 @@ def main():
         batch = symbols[index:index+60]
 
         for symbol in batch:
-            scan_stock(symbol)
-            time.sleep(0.3)
+            scan_options(symbol)
+            time.sleep(0.5)
 
         index += 60
-
         if index >= total:
-            index = 0  # يرجع من البداية
+            index = 0
 
         time.sleep(60)
 
