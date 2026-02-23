@@ -4,12 +4,17 @@ import yfinance as yf
 import pandas as pd
 import pytz
 import time
+import logging
 from datetime import datetime
+
+# =============================
+# تقليل رسائل yfinance
+# =============================
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # =============================
 # ENV
 # =============================
-
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -22,10 +27,8 @@ ny = pytz.timezone("America/New_York")
 # =============================
 # SETTINGS
 # =============================
-
-BATCH_SIZE = 5
-DELAY = 10
-ALERT_INTERVAL = 5  # منع سبام تلغرام
+DELAY = 1          # 1 سهم كل 1 ثانية
+ALERT_INTERVAL = 5 # منع سبام تلغرام
 
 last_alert_time = 0
 option_levels = {}
@@ -34,7 +37,6 @@ bad_tickers = set()
 # =============================
 # TELEGRAM
 # =============================
-
 def send_message(text):
     global last_alert_time
     now = time.time()
@@ -54,18 +56,16 @@ def send_message(text):
 # =============================
 # MARKET TIME
 # =============================
-
 def market_is_open():
     now = datetime.now(ny)
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960
+    return 570 <= minutes <= 960  # 9:30 - 16:00 NY
 
 # =============================
 # NASDAQ CLEAN LIST
 # =============================
-
 def get_nasdaq():
     url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     df = pd.read_csv(url, sep="|")
@@ -80,13 +80,12 @@ def get_nasdaq():
     return df["Symbol"].tolist()
 
 # =============================
-# OPTION CHECK (فقط عند الإشارة)
+# OPTION CHECK (خفيف)
 # =============================
-
 def check_options(ticker):
     try:
         stock = yf.Ticker(ticker)
-        expirations = stock.options[:2]  # فقط أول تاريخين
+        expirations = stock.options[:1]  # أول تاريخ فقط لتقليل الضغط
 
         for exp in expirations:
 
@@ -107,7 +106,7 @@ def check_options(ticker):
                     if not (0.05 <= float(last_price) <= 0.50):
                         continue
 
-                    if volume < 5000 or oi < 3000:
+                    if volume < 3000 or oi < 2000:
                         continue
 
                     key = f"{ticker}_{strike}_{exp}_{opt_type}"
@@ -142,7 +141,6 @@ def check_options(ticker):
 # =============================
 # START
 # =============================
-
 print("🚀 BOT STARTED")
 all_tickers = get_nasdaq()
 ticker_index = 0
@@ -150,46 +148,47 @@ ticker_index = 0
 # =============================
 # MAIN LOOP
 # =============================
-
 while True:
 
-    batch = all_tickers[ticker_index:ticker_index+BATCH_SIZE]
-    ticker_index += BATCH_SIZE
+    ticker = all_tickers[ticker_index]
+    ticker_index += 1
 
     if ticker_index >= len(all_tickers):
         ticker_index = 0
 
-    for ticker in batch:
+    if ticker in bad_tickers:
+        time.sleep(DELAY)
+        continue
 
-        if ticker in bad_tickers:
+    try:
+        data = yf.download(
+            ticker,
+            period="1d",
+            interval="1m",
+            progress=False,
+            threads=False
+        )
+
+        if data is None or data.empty or len(data) < 5:
+            bad_tickers.add(ticker)
+            time.sleep(DELAY)
             continue
 
-        try:
-            data = yf.download(
-                ticker,
-                period="1d",
-                interval="1m",
-                progress=False
-            )
+        price = float(data["Close"].iloc[-1])
+        open_price = float(data["Open"].iloc[0])
 
-            if data is None or data.empty or len(data) < 5:
-                bad_tickers.add(ticker)
-                continue
+        if open_price == 0:
+            time.sleep(DELAY)
+            continue
 
-            price = float(data["Close"].iloc[-1])
-            open_price = float(data["Open"].iloc[0])
+        change = ((price - open_price) / open_price) * 100
 
-            if open_price == 0:
-                continue
+        if 0.07 <= price <= 20 and abs(change) >= 3:
 
-            change = ((price - open_price) / open_price) * 100
+            direction = "🟢" if change > 0 else "🔴"
+            header = "BREAKOUT" if change > 0 else "BREAKDOWN"
 
-            if 0.07 <= price <= 20 and abs(change) >= 3:
-
-                direction = "🟢" if change > 0 else "🔴"
-                header = "BREAKOUT" if change > 0 else "BREAKDOWN"
-
-                message = f"""
+            message = f"""
 🔸 {ticker}
 {direction} STOCK {header}
 
@@ -197,13 +196,12 @@ while True:
 📈 Move: {round(change,2)}%
 🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
 """
-                send_message(message)
+            send_message(message)
 
-                # فحص الأوبشن فقط عند الإشارة
-                if market_is_open():
-                    check_options(ticker)
+            if market_is_open():
+                check_options(ticker)
 
-        except:
-            bad_tickers.add(ticker)
+    except:
+        bad_tickers.add(ticker)
 
     time.sleep(DELAY)
