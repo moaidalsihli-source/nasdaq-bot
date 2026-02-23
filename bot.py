@@ -1,261 +1,173 @@
-import os
-import requests
 import yfinance as yf
-import pandas as pd
-import pytz
 import time
-import logging
+import pytz
 from datetime import datetime
+import pandas as pd
+import os
 
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+# =========================
+# SETTINGS
+# =========================
+MIN_STOCK_PRICE = 0.20
+MAX_STOCK_PRICE = 10
 
-# ==============================
-# ENV
-# ==============================
+MIN_OPTION_PRICE = 0.15
+MAX_OPTION_PRICE = 0.60
 
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+MIN_DELTA = 0.20
+MAX_DELTA = 0.60
 
-if not TOKEN or not CHAT_ID:
-    print("TOKEN OR CHAT_ID NOT FOUND")
-    exit()
+NASDAQ_SYMBOLS_URL = "https://old.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 
 ny = pytz.timezone("America/New_York")
 
-# ==============================
-# SETTINGS
-# ==============================
-
-MIN_PRICE = 0.20
-MAX_PRICE = 10
-DELAY = 1
-OPTION_INTERVAL = 60
-
-OPTION_LEVELS = [
-    5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
-    125, 150, 175, 200,
-    250, 300, 350, 400, 450, 500, 550, 600,
-    650, 700, 750, 800, 850, 900, 950, 1000
-]
-
-stock_levels = {}
-option_memory = {}
-last_option_scan = 0
-
-# ==============================
-# TELEGRAM
-# ==============================
-
-def send_message(text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text}
-        )
-    except:
-        pass
-
-# ==============================
-# TIME CONTROL
-# ==============================
-
-def stock_time_allowed():
-    now = datetime.now(ny)
-
-    if now.weekday() >= 5:
-        return False
-
-    minutes = now.hour * 60 + now.minute
-    return 240 <= minutes <= 1200  # 4:00 AM → 8:00 PM
-
-
-def option_market_open():
-    now = datetime.now(ny)
-
-    if now.weekday() >= 5:
-        return False
-
-    minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960  # 9:30 AM → 4:00 PM
-
-
-# ==============================
-# NASDAQ 4 LETTER
-# ==============================
-
-def get_nasdaq_4():
-    url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
-    df = pd.read_csv(url, sep="|")
-    df = df[df["Test Issue"] == "N"]
-    df = df[df["ETF"] == "N"]
-    df = df[df["Symbol"].str.match(r"^[A-Z]{4}$")]
-    return df["Symbol"].tolist()
-
-
-# ==============================
-# STOCK SCAN (3% STEP)
-# ==============================
-
-def scan_stock(ticker):
-
-    if not stock_time_allowed():
-        return
-
-    try:
-        data = yf.download(
-            ticker,
-            period="1d",
-            interval="1m",
-            progress=False,
-            threads=False
-        )
-
-        if data.empty:
-            return
-
-        price = float(data["Close"].iloc[-1])
-        open_price = float(data["Open"].iloc[0])
-
-        if not (MIN_PRICE <= price <= MAX_PRICE):
-            return
-
-        change = ((price - open_price) / open_price) * 100
-        step = int(abs(change) // 3) * 3
-
-        if step >= 3:
-
-            direction = "UP" if change > 0 else "DOWN"
-            key = f"{ticker}_{direction}"
-
-            if key not in stock_levels:
-                stock_levels[key] = 0
-
-            if step > stock_levels[key]:
-
-                stock_levels[key] = step
-                direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
-
-                message = f"""
-Mod F-15
-
-🔸 الرمز -> {ticker}
-🚨 تنبيه مستوى {step}%
-⚪️ الإشارة -> زخم
-{direction_icon}
-
-💰 بدأ من -> {round(open_price,2)}$
-📍 الآن -> {round(price,2)}$
-📈 نسبة التغير -> {round(change,2)}%
-
-🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
-"""
-                send_message(message)
-
-    except:
-        pass
-
-
-# ==============================
-# OPTION SCAN
-# ==============================
-
-def scan_options(ticker):
-
-    if not option_market_open():
-        return
-
-    try:
-        stock = yf.Ticker(ticker)
-        expirations = stock.options[:1]
-
-        for exp in expirations:
-            chain = stock.option_chain(exp)
-
-            for opt_type, df_opt in [("CALL", chain.calls), ("PUT", chain.puts)]:
-
-                for _, row in df_opt.iterrows():
-
-                    last_price = row["lastPrice"]
-                    volume = row["volume"]
-                    strike = row["strike"]
-
-                    if pd.isna(last_price) or pd.isna(volume):
-                        continue
-
-                    if not (0.05 <= float(last_price) <= 0.50):
-                        continue
-
-                    if strike > 100:
-                        continue
-
-                    key = f"{ticker}_{strike}_{opt_type}"
-
-                    if key not in option_memory:
-                        option_memory[key] = {
-                            "entry": float(last_price),
-                            "last_level": 0
-                        }
-                        continue
-
-                    entry = option_memory[key]["entry"]
-                    gain = ((float(last_price) - entry) / entry) * 100
-
-                    for level in OPTION_LEVELS:
-
-                        if gain >= level and option_memory[key]["last_level"] < level:
-
-                            option_memory[key]["last_level"] = level
-                            direction = "🟢" if opt_type == "CALL" else "🔴"
-
-                            message = f"""
-Mod F-15 OPTIONS
-
-🔸 الرمز -> {ticker}
-{direction} {opt_type} OPTION LEVEL HIT
-
-📅 تاريخ العقد -> {exp}
-📌 Strike -> {strike}
-
-💲 دخول -> {round(entry,2)}$
-💲 الآن -> {round(float(last_price),2)}$
-🚀 نسبة الربح -> +{round(gain,1)}%
-
-🔥 حجم العقود -> {int(volume):,}
-🕒 {datetime.now(ny).strftime("%I:%M %p")} NY
-"""
-                            send_message(message)
-
-    except:
-        pass
-
-
-# ==============================
-# START
-# ==============================
+stock_alert_count = {}
+option_entry_price = {}
 
 print("🚀 Mod F-15 SCANNER STARTED")
-send_message("🚀 Mod F-15 SCANNER STARTED")
 
-tickers = get_nasdaq_4()
-stock_index = 0
-option_index = 0
+# =========================
+# GET NASDAQ 4 LETTER SYMBOLS
+# =========================
+def get_nasdaq_symbols():
+    df = pd.read_csv(NASDAQ_SYMBOLS_URL, sep="|")
+    symbols = df["Symbol"].tolist()
+    symbols = [s for s in symbols if len(s) == 4 and s.isalpha()]
+    return symbols
 
-while True:
+# =========================
+# TIME CHECK
+# =========================
+def is_regular_market():
+    now = datetime.now(ny)
+    if now.weekday() >= 5:
+        return False
+    return now.hour >= 9 and (now.hour < 16 or (now.hour == 9 and now.minute >= 30))
 
-    ticker = tickers[stock_index]
-    stock_index += 1
-    if stock_index >= len(tickers):
-        stock_index = 0
+def is_extended_market():
+    now = datetime.now(ny)
+    if now.weekday() >= 5:
+        return False
+    return 4 <= now.hour < 20
 
-    scan_stock(ticker)
+# =========================
+# STOCK SCANNER
+# =========================
+def scan_stock(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(period="1d", interval="1m")
 
-    if time.time() - last_option_scan >= OPTION_INTERVAL:
-        opt_ticker = tickers[option_index]
-        option_index += 1
-        if option_index >= len(tickers):
-            option_index = 0
+        if len(data) < 5:
+            return
 
-        scan_options(opt_ticker)
-        last_option_scan = time.time()
+        price = data["Close"].iloc[-1]
+        open_price = data["Open"].iloc[0]
+        change_pct = ((price - open_price) / open_price) * 100
 
-    time.sleep(DELAY)
+        if not (MIN_STOCK_PRICE <= price <= MAX_STOCK_PRICE):
+            return
+
+        if change_pct >= 3:
+            count = stock_alert_count.get(symbol, 0) + 1
+            stock_alert_count[symbol] = count
+
+            direction = "🟢 صاعد" if change_pct > 0 else "🔴 هابط"
+
+            print(f"""
+Mod F-15
+
+🔸 الرمز -> {symbol}
+🚨 تنبيه رقم {count} اليوم
+⚪️ الإشارة -> زخم
+{direction}
+
+💰 بدأ من -> {open_price:.2f}$
+📍 الآن -> {price:.2f}$
+📈 نسبة الصعود -> {change_pct:.2f}%
+
+🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
+""")
+
+    except:
+        pass
+
+# =========================
+# OPTION SCANNER
+# =========================
+def scan_options(symbol):
+    if not is_regular_market():
+        return
+
+    try:
+        ticker = yf.Ticker(symbol)
+        expirations = ticker.options
+
+        for exp in expirations[:1]:
+            chain = ticker.option_chain(exp)
+            calls = chain.calls
+
+            for _, row in calls.iterrows():
+                price = row["lastPrice"]
+                strike = row["strike"]
+                delta = row.get("delta", None)
+                volume = row["volume"]
+
+                if price is None or delta is None:
+                    continue
+
+                if (
+                    MIN_OPTION_PRICE <= price <= MAX_OPTION_PRICE and
+                    MIN_DELTA <= delta <= MAX_DELTA and
+                    volume >= 1000
+                ):
+
+                    key = f"{symbol}_{strike}_{exp}"
+
+                    if key not in option_entry_price:
+                        option_entry_price[key] = price
+
+                    entry = option_entry_price[key]
+                    gain = ((price - entry) / entry) * 100
+
+                    levels = [5,10,20,30,40,50,75,100,150,200,300,400,500,750,1000]
+
+                    for lvl in levels:
+                        if gain >= lvl:
+                            print(f"""
+Mod F-15 OPTIONS
+
+🔸 {symbol}
+🟢 CALL OPTION LEVEL HIT
+
+📅 Exp -> {exp}
+📌 Strike -> {strike}
+💲 Entry -> {entry:.2f}
+💲 Current -> {price:.2f}
+🚀 +{gain:.0f}%
+
+🔥 Volume -> {int(volume)}
+🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
+""")
+                            break
+
+    except:
+        pass
+
+# =========================
+# MAIN LOOP
+# =========================
+def main():
+    symbols = get_nasdaq_symbols()
+
+    while True:
+        for symbol in symbols:
+            if is_extended_market():
+                scan_stock(symbol)
+
+            scan_options(symbol)
+
+            time.sleep(1)  # 1 symbol per second
+
+if __name__ == "__main__":
+    main()
