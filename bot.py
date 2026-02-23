@@ -68,16 +68,75 @@ def send_message(text):
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             data={"chat_id": CHAT_ID, "text": text}
         )
-    except Exception as e:
-        print("Telegram Error:", e)
+    except:
+        pass
 
-send_message("🚀 STOCK + OPTION SCANNER STARTED")
+send_message("🚀 STOCK + CALL + PUT SCANNER STARTED")
 
 # =============================
-# OPTION CHECK
+# OPTION CHECK (CALL + PUT)
 # =============================
 
-def check_options(ticker, stock_price):
+def process_option_rows(ticker, exp, rows, option_type):
+
+    for _, row in rows.iterrows():
+
+        option_price = row["lastPrice"]
+        strike = row["strike"]
+        volume = row["volume"]
+
+        if strike > 100:
+            continue
+
+        if option_price is None or option_price == 0:
+            continue
+
+        if not (0.05 <= option_price <= 0.50):
+            continue
+
+        contract_id = f"{ticker}_{exp}_{strike}_{option_type}"
+
+        if contract_id not in option_levels:
+            option_levels[contract_id] = {
+                "entry": option_price,
+                "level": 0
+            }
+
+        entry = option_levels[contract_id]["entry"]
+        change = ((option_price - entry) / entry) * 100
+        last_level = option_levels[contract_id]["level"]
+
+        if last_level == 0 and change >= 25:
+            level = 25
+        elif last_level >= 25 and change >= last_level + 10:
+            level = last_level + 10
+        else:
+            continue
+
+        if level > 400:
+            continue
+
+        option_levels[contract_id]["level"] = level
+
+        now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
+
+        direction_icon = "🟢" if option_type == "CALL" else "🔴"
+
+        send_message(f"""
+🔸 {ticker}
+{direction_icon} {option_type} OPTION LEVEL HIT
+
+📅 Exp: {exp}
+📌 Strike: {strike}
+💲 Entry: {round(entry,2)}
+💲 Current: {round(option_price,2)}
+🚀 +{round(change,1)}%
+
+🔥 Option Volume: {int(volume) if volume else 0}
+🕒 {now_ny} NY
+""")
+
+def check_options(ticker):
 
     if not market_is_open():
         return
@@ -89,64 +148,11 @@ def check_options(ticker, stock_price):
         if not expirations:
             return
 
-        exp = expirations[0]  # أقرب تاريخ فقط
+        exp = expirations[0]  # أقرب تاريخ
         chain = stock.option_chain(exp)
-        calls = chain.calls
 
-        for _, row in calls.iterrows():
-
-            option_price = row["lastPrice"]
-            strike = row["strike"]
-            volume = row["volume"]
-
-            if strike > 100:
-                continue
-
-            if option_price is None or option_price == 0:
-                continue
-
-            if not (0.05 <= option_price <= 0.50):
-                continue
-
-            contract_id = f"{ticker}_{exp}_{strike}"
-
-            if contract_id not in option_levels:
-                option_levels[contract_id] = {
-                    "entry": option_price,
-                    "level": 0
-                }
-
-            entry = option_levels[contract_id]["entry"]
-            change = ((option_price - entry) / entry) * 100
-            last_level = option_levels[contract_id]["level"]
-
-            if last_level == 0 and change >= 25:
-                level = 25
-            elif last_level >= 25 and change >= last_level + 10:
-                level = last_level + 10
-            else:
-                continue
-
-            if level > 400:
-                continue
-
-            option_levels[contract_id]["level"] = level
-
-            now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
-
-            send_message(f"""
-🔸 {ticker}
-🟢 CALL OPTION LEVEL HIT
-
-📅 Exp: {exp}
-📌 Strike: {strike}
-💲 Entry: {round(entry,2)}
-💲 Current: {round(option_price,2)}
-🚀 +{round(change,1)}%
-
-🔥 Option Volume: {int(volume) if volume else 0}
-🕒 {now_ny} NY
-""")
+        process_option_rows(ticker, exp, chain.calls, "CALL")
+        process_option_rows(ticker, exp, chain.puts, "PUT")
 
     except:
         return
@@ -191,7 +197,7 @@ def check_stock(ticker):
         elif last >= 3 and abs_change >= last + 3:
             level = last + 3
         else:
-            check_options(ticker, price)
+            check_options(ticker)
             return
 
         stock_levels[ticker] = level
@@ -216,7 +222,7 @@ def check_stock(ticker):
 🕒 {now_ny} NY
 """)
 
-        check_options(ticker, price)
+        check_options(ticker)
 
     except:
         return
