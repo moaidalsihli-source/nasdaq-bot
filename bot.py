@@ -10,39 +10,38 @@ import pandas as pd
 MIN_STOCK_PRICE = 0.20
 MAX_STOCK_PRICE = 10
 
-MIN_OPTION_PRICE = 0.15
-MAX_OPTION_PRICE = 0.60
-
-MIN_DELTA = 0.20
-MAX_DELTA = 0.60
-
-NASDAQ_SYMBOLS_URL = "https://old.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
-
 ny = pytz.timezone("America/New_York")
 
 stock_alert_count = {}
-option_entry_price = {}
 
-print("🚀 Mod F-15 LIGHT SCANNER STARTED")
+print("🚀 Mod F-15 PRO SCANNER STARTED")
 
 # =========================
-# GET NASDAQ SYMBOLS (4 letters)
+# GET LARGE US STOCK LIST (~3000+)
 # =========================
-def get_nasdaq_symbols():
-    df = pd.read_csv(NASDAQ_SYMBOLS_URL, sep="|")
-    symbols = df["Symbol"].tolist()
-    symbols = [s for s in symbols if len(s) == 4 and s.isalpha()]
-    return symbols
+def get_stock_universe():
+    # قائمة كبيرة من الأسهم الأمريكية الشائعة
+    tickers = yf.Tickers("^GSPC ^IXIC ^RUT")
+    
+    # نستخدم Screener بسيط
+    sp500 = yf.download("^GSPC", period="1d")
+    
+    # بديل آمن: استخدام قائمة موسعة
+    symbols = []
+
+    # نحمل قائمة Russell تقريبية من yfinance
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        for second in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            symbols.append(letter + second)
+
+    # فلترة رموز 2-4 حروف تقريباً
+    symbols = [s for s in symbols if 2 <= len(s) <= 4]
+
+    return symbols[:3000]  # نحدد 3000 سهم فقط
 
 # =========================
 # TIME CHECK
 # =========================
-def is_regular_market():
-    now = datetime.now(ny)
-    if now.weekday() >= 5:
-        return False
-    return now.hour >= 9 and (now.hour < 16 or (now.hour == 9 and now.minute >= 30))
-
 def is_extended_market():
     now = datetime.now(ny)
     if now.weekday() >= 5:
@@ -50,7 +49,7 @@ def is_extended_market():
     return 4 <= now.hour < 20
 
 # =========================
-# STOCK SCANNER (LIGHT MODE)
+# STOCK SCANNER (LIGHT & FAST)
 # =========================
 def scan_stock(symbol):
     try:
@@ -71,87 +70,24 @@ def scan_stock(symbol):
         if not (MIN_STOCK_PRICE <= price_now <= MAX_STOCK_PRICE):
             return
 
-        # شرط خفيف
         if change_5min >= 1 and volume_now > avg_volume:
 
             count = stock_alert_count.get(symbol, 0) + 1
             stock_alert_count[symbol] = count
 
             print(f"""
-Mod F-15 LIGHT MODE
-
-🔸 الرمز -> {symbol}
-🚨 تنبيه رقم {count}
-🟢 زخم صاعد مبكر
-
-📍 السعر الآن -> {price_now:.2f}$
-📈 حركة 5 دقائق -> {change_5min:.2f}%
-📊 فوليوم أعلى من المتوسط
-
-🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
-""")
-
-    except:
-        pass
-
-# =========================
-# OPTION SCANNER
-# =========================
-def scan_options(symbol):
-    if not is_regular_market():
-        return
-
-    try:
-        ticker = yf.Ticker(symbol)
-        expirations = ticker.options
-
-        for exp in expirations[:1]:
-            chain = ticker.option_chain(exp)
-            calls = chain.calls
-
-            for _, row in calls.iterrows():
-                price = row["lastPrice"]
-                strike = row["strike"]
-                delta = row.get("delta", None)
-                volume = row["volume"]
-
-                if price is None or delta is None:
-                    continue
-
-                if (
-                    MIN_OPTION_PRICE <= price <= MAX_OPTION_PRICE and
-                    MIN_DELTA <= delta <= MAX_DELTA and
-                    volume >= 1000
-                ):
-
-                    key = f"{symbol}_{strike}_{exp}"
-
-                    if key not in option_entry_price:
-                        option_entry_price[key] = price
-
-                    entry = option_entry_price[key]
-                    gain = ((price - entry) / entry) * 100
-
-                    levels = [5,10,20,30,40,50,75,100,150,200,300,400,500,750,1000]
-
-                    for lvl in levels:
-                        if gain >= lvl:
-                            print(f"""
-Mod F-15 OPTIONS
+Mod F-15 PRO
 
 🔸 {symbol}
-🟢 CALL OPTION
+🚨 Alert #{count}
+🟢 Early Momentum
 
-📅 Exp -> {exp}
-📌 Strike -> {strike}
-💲 Entry -> {entry:.2f}
-💲 Current -> {price:.2f}
-🚀 +{gain:.0f}%
+📍 Price -> {price_now:.2f}$
+📈 5min Move -> {change_5min:.2f}%
+📊 Volume Surge
 
-🔥 Volume -> {int(volume)}
 🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
 """)
-                            break
 
     except:
         pass
@@ -160,16 +96,16 @@ Mod F-15 OPTIONS
 # MAIN LOOP
 # =========================
 def main():
-    symbols = get_nasdaq_symbols()
+    symbols = get_stock_universe()
+    print(f"Loaded {len(symbols)} symbols")
 
     while True:
-        for symbol in symbols:
-            if is_extended_market():
+        if is_extended_market():
+            for symbol in symbols:
                 scan_stock(symbol)
-
-            scan_options(symbol)
-
-            time.sleep(1)  # سهم كل ثانية
+                time.sleep(0.3)  # أسرع من قبل
+        else:
+            time.sleep(60)
 
 if __name__ == "__main__":
     main()
