@@ -32,30 +32,22 @@ LEVEL_PERCENT = 3
 DELAY = 1
 OPTION_INTERVAL = 60
 
-last_alert_time = 0
-ALERT_COOLDOWN = 2
-last_option_scan = 0
+OPTION_LEVELS = [25, 50, 100, 200, 400]
 
 bad_tickers = set()
 option_memory = {}
+last_option_scan = 0
 
 # ==============================
 # TELEGRAM
 # ==============================
 
 def send_message(text):
-    global last_alert_time
-    now = time.time()
-
-    if now - last_alert_time < ALERT_COOLDOWN:
-        return
-
     try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             data={"chat_id": CHAT_ID, "text": text}
         )
-        last_alert_time = now
     except:
         pass
 
@@ -68,7 +60,7 @@ def market_open():
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960  # 9:30 - 16:00
+    return 570 <= minutes <= 960
 
 # ==============================
 # NASDAQ 4 LETTER
@@ -112,29 +104,32 @@ def scan_stock(ticker):
         if not (MIN_PRICE <= price <= MAX_PRICE):
             return
 
-        change = ((price - open_price) / open_price) * 100
-        accel_3m = ((data["Close"].iloc[-1] - data["Close"].iloc[-3]) /
-                    data["Close"].iloc[-3]) * 100
+        daily_change = ((price - open_price) / open_price) * 100
+        price_3m_ago = float(data["Close"].iloc[-3])
+        accel_3m = ((price - price_3m_ago) / price_3m_ago) * 100
 
         vol_1m = int(data["Volume"].iloc[-1])
         vol_2m = int(data["Volume"].iloc[-2:].sum())
         vol_5m = int(data["Volume"].iloc[-5:].sum())
 
-        if abs(change) >= LEVEL_PERCENT:
+        if abs(daily_change) >= LEVEL_PERCENT and abs(accel_3m) >= 0.5:
 
-            direction = "🟢 STOCK BREAKOUT" if change > 0 else "🔴 STOCK BREAKDOWN"
+            direction = "🟢 صاعد" if daily_change > 0 else "🔴 هابط"
 
             message = f"""
-🔸 {ticker}
-{direction}
+🔸 الرمز -> {ticker}
+🚨 تنبيه زخم
 
-💰 Price: {round(price,2)}$
-📈 Daily Change: {round(change,2)}%
-⚡ 3m Acceleration: {round(accel_3m,2)}%
+📈 الاتجاه -> {direction}
+💰 السعر -> {round(price,2)}$ ({round(daily_change,2)}%)
 
-📊 1m Vol: {vol_1m:,}
-📊 2m Vol: {vol_2m:,}
-📊 5m Vol: {vol_5m:,}
+🚀 بدأ من -> {round(price_3m_ago,2)}$
+⚡ تسارع 3m -> {round(accel_3m,2)}%
+
+📊 الفوليوم ->
+1m: {vol_1m:,}
+2m: {vol_2m:,}
+5m: {vol_5m:,}
 
 🎯 Level {LEVEL_PERCENT}%
 🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
@@ -158,7 +153,6 @@ def scan_options(ticker):
         expirations = stock.options[:1]
 
         for exp in expirations:
-
             chain = stock.option_chain(exp)
 
             for opt_type, df_opt in [("CALL", chain.calls), ("PUT", chain.puts)]:
@@ -181,31 +175,39 @@ def scan_options(ticker):
                     key = f"{ticker}_{strike}_{opt_type}"
 
                     if key not in option_memory:
-                        option_memory[key] = float(last_price)
+                        option_memory[key] = {
+                            "entry": float(last_price),
+                            "last_level": 0
+                        }
                         continue
 
-                    entry = option_memory[key]
+                    entry = option_memory[key]["entry"]
                     gain = ((float(last_price) - entry) / entry) * 100
 
-                    if gain >= 25:
+                    for level in OPTION_LEVELS:
 
-                        direction = "🟢" if opt_type == "CALL" else "🔴"
+                        if gain >= level and option_memory[key]["last_level"] < level:
 
-                        message = f"""
+                            direction = "🟢" if opt_type == "CALL" else "🔴"
+
+                            message = f"""
 🔸 {ticker}
-{direction} {opt_type} OPTION LEVEL HIT
+{direction} {opt_type} OPTION
 
 📅 Exp: {exp}
 📌 Strike: {strike}
+
 💲 Entry: {round(entry,2)}
 💲 Current: {round(float(last_price),2)}
-🚀 +{round(gain,1)}%
+
+🚀 +{level}% HIT
+📈 Current Gain: +{round(gain,1)}%
 
 🔥 Option Volume: {int(volume):,}
 🕒 {datetime.now(ny).strftime("%I:%M %p")} NY
 """
-                        send_message(message)
-                        option_memory[key] = float(last_price)
+                            send_message(message)
+                            option_memory[key]["last_level"] = level
 
     except:
         pass
@@ -215,18 +217,7 @@ def scan_options(ticker):
 # ==============================
 
 print("🚀 BOT STARTED")
-
-send_message(f"""
-🚀 NASDAQ SCANNER STARTED
-
-📊 4 Letter Stocks Only
-💰 Range: 0.07$ - 15$
-🎯 Level: {LEVEL_PERCENT}%
-⚙ Stock Scan: 1 per second
-📈 Option Scan: 1 per minute (Market Hours)
-
-🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
-""")
+send_message("🚀 NASDAQ SCANNER STARTED")
 
 tickers = get_nasdaq_4()
 stock_index = 0
@@ -234,7 +225,6 @@ option_index = 0
 
 while True:
 
-    # ---- STOCK (1 كل 1 ثانية)
     ticker = tickers[stock_index]
     stock_index += 1
     if stock_index >= len(tickers):
@@ -242,7 +232,6 @@ while True:
 
     scan_stock(ticker)
 
-    # ---- OPTION (كل دقيقة)
     if market_open() and time.time() - last_option_scan >= OPTION_INTERVAL:
 
         opt_ticker = tickers[option_index]
