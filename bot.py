@@ -6,125 +6,227 @@ import pytz
 import time
 from datetime import datetime
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# =============================
+# قراءة متغيرات Railway
+# =============================
 
-def send_message(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text}
-    requests.post(url, data=data)
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+if not TOKEN or not CHAT_ID:
+    print("❌ TOKEN OR CHAT_ID NOT FOUND!")
+    exit()
+
+# =============================
+# إعدادات
+# =============================
 
 ny = pytz.timezone("America/New_York")
 
-tickers = pd.read_csv(
-    "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
-)["Symbol"].tolist()
+stock_levels = {}
+option_levels = {}
 
-index = 0
+# =============================
+# وقت السوق الرسمي للعقود
+# =============================
 
-def get_session_label(now):
-    if 4 <= now.hour < 9 or (now.hour == 9 and now.minute < 30):
-        return "🔵 Pre-Market"
-    elif (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16:
-        return "🟢 Official Market"
-    elif 16 <= now.hour < 20:
-        return "🟣 After-Market"
-    else:
-        return "🌙 Extended Hours"
-
-def check_stock(ticker, now):
-    try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period="1d", interval="1m")
-
-        if len(data) < 30:
-            return None
-
-        price = data["Close"].iloc[-1]
-        open_price = data["Open"].iloc[0]
-
-        # فلترة السعر
-        if not (0.5 <= price <= 10):
-            return None
-
-        # ======================
-        # الشروط الأساسية
-        # ======================
-
-        # 1️⃣ كسر أعلى 20 دقيقة
-        high_20 = data["High"].tail(20).max()
-        bos = price >= high_20
-
-        # 2️⃣ فوليوم قوي جدًا
-        avg_vol = data["Volume"].tail(20).mean()
-        current_vol = data["Volume"].iloc[-1]
-        volume_strong = current_vol >= avg_vol * 2.5
-
-        if not (bos and volume_strong):
-            return None
-
-        # ======================
-        # الشروط الداعمة
-        # ======================
-
-        support_score = 0
-
-        # ارتداد من القاع
-        day_low = data["Low"].min()
-        rebound_percent = ((price - day_low) / day_low) * 100
-        if rebound_percent >= 3:
-            support_score += 1
-
-        # تسارع 5 دقائق
-        price_5m_ago = data["Close"].iloc[-6]
-        accel_percent = ((price - price_5m_ago) / price_5m_ago) * 100
-        if accel_percent >= 2.5:
-            support_score += 1
-
-        # حركة يومية
-        day_change = ((price - open_price) / open_price) * 100
-        if abs(day_change) >= 4:
-            support_score += 1
-
-        if support_score < 1:
-            return None
-
-        direction = "🟢 صعود" if day_change > 0 else "🔴 هبوط"
-        session = get_session_label(now)
-
-        message = (
-            f"\n👑 Elite Aggressive Scanner\n"
-            f"{session}\n"
-            f"🔸 {ticker}\n"
-            f"{direction}\n"
-            f"💰 السعر: {round(price,2)}$\n"
-            f"📊 حركة يومية: {round(day_change,2)}%\n"
-            f"📈 ارتداد من القاع: {round(rebound_percent,2)}%\n"
-            f"⚡ تسارع 5 دقائق: {round(accel_percent,2)}%\n"
-            f"🔥 الفوليوم الحالي: {int(current_vol)}"
-        )
-
-        return message
-
-    except:
-        return None
-
-
-send_message("👑 Elite Aggressive Scanner بدأ الآن")
-
-while True:
+def market_is_open():
     now = datetime.now(ny)
 
-    if index >= len(tickers):
-        index = 0
+    if now.weekday() >= 5:
+        return False
 
-    ticker = tickers[index]
-    index += 1
+    current_minutes = now.hour * 60 + now.minute
+    open_minutes = 9 * 60 + 30
+    close_minutes = 16 * 60
 
-    msg = check_stock(ticker, now)
+    return open_minutes <= current_minutes <= close_minutes
 
-    if msg:
-        send_message(msg)
-        time.sleep(20)
+# =============================
+# تحميل أسهم NASDAQ
+# =============================
+
+def get_nasdaq():
+    url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
+    df = pd.read_csv(url, sep="|")
+    tickers = df["Symbol"].tolist()
+    return [t for t in tickers if isinstance(t, str)]
+
+print("Loading NASDAQ...")
+all_tickers = get_nasdaq()
+print("Loaded:", len(all_tickers))
+
+# =============================
+# إرسال رسالة
+# =============================
+
+def send_message(text):
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": text}
+    )
+
+# =============================
+# رسالة بدء التشغيل
+# =============================
+
+def send_startup_message():
+    now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
+
+    message = f"""
+🚀 NASDAQ SCANNER STARTED
+
+📊 Stocks: 3% then every +3%
+📑 Options: 25% then every +10%
+📡 Options Active: Official Market Only
+
+🕒 Started At: {now_ny} NY
+"""
+    send_message(message)
+
+send_startup_message()
+
+# =============================
+# تنبيه السهم (كل +3%)
+# =============================
+
+def check_stock_levels(ticker, price, change, accel):
+
+    if ticker not in stock_levels:
+        stock_levels[ticker] = 0
+
+    last_level = stock_levels[ticker]
+    abs_change = abs(change)
+
+    if last_level == 0 and abs_change >= 3:
+        level_hit = 3
+    elif last_level >= 3:
+        next_level = last_level + 3
+        if abs_change >= next_level:
+            level_hit = next_level
+        else:
+            return
     else:
-        time.sleep(0.8)
+        return
+
+    stock_levels[ticker] = level_hit
+
+    direction = "🟢" if change > 0 else "🔴"
+    header = "STOCK BREAKOUT" if change > 0 else "STOCK BREAKDOWN"
+    now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
+
+    message = f"""
+🔸 {ticker}
+{direction} {header}
+
+💰 Price: {round(price,2)}$
+📊 Move: {round(change,2)}%
+🎯 Level Hit: {level_hit}%
+
+⚡ 3m Acceleration: {round(accel,2)}
+🕒 {now_ny} NY
+"""
+    send_message(message)
+
+# =============================
+# تنبيه العقد (25% ثم +10%)
+# =============================
+
+def check_option_levels(ticker, exp, strike, current_price, volume, direction):
+
+    key = f"{ticker}_{strike}_{exp}"
+
+    if key not in option_levels:
+        option_levels[key] = {
+            "entry": current_price,
+            "last_level": 0
+        }
+        return
+
+    entry = option_levels[key]["entry"]
+    last_level = option_levels[key]["last_level"]
+
+    change = ((current_price - entry) / entry) * 100
+
+    if last_level == 0 and change >= 25:
+        level_hit = 25
+    elif last_level >= 25:
+        next_level = last_level + 10
+        if change >= next_level:
+            level_hit = next_level
+        else:
+            return
+    else:
+        return
+
+    option_levels[key]["last_level"] = level_hit
+
+    color = "🟢 CALL" if direction == "CALL" else "🔴 PUT"
+    now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
+
+    message = f"""
+🔸 {ticker}
+{color} OPTION LEVEL
+
+📅 Exp: {exp}
+📌 Strike: {strike}
+💲 Entry: {round(entry,2)}
+💲 Current: {round(current_price,2)}
+🚀 +{level_hit}%
+
+🔥 Volume: {int(volume)}
+🕒 {now_ny} NY
+"""
+    send_message(message)
+
+# =============================
+# التشغيل الرئيسي
+# =============================
+
+while True:
+
+    for ticker in all_tickers[:250]:
+
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(period="1d", interval="1m")
+
+            if len(data) < 5:
+                continue
+
+            price = data["Close"].iloc[-1]
+            open_price = data["Open"].iloc[0]
+            change = ((price - open_price) / open_price) * 100
+            accel = ((price - data["Close"].iloc[-4]) / data["Close"].iloc[-4]) * 100
+
+            if 0.07 <= price <= 10:
+                check_stock_levels(ticker, price, change, accel)
+
+                if market_is_open():
+                    direction = "CALL" if change > 0 else "PUT"
+
+                    for exp in stock.options:
+                        chain = stock.option_chain(exp)
+                        options = chain.calls if direction=="CALL" else chain.puts
+
+                        for _, row in options.iterrows():
+
+                            opt_price = row["lastPrice"]
+                            strike = row["strike"]
+                            vol = row["volume"]
+
+                            if pd.isna(opt_price) or pd.isna(vol):
+                                continue
+
+                            if 0.05 <= opt_price <= 0.50:
+                                check_option_levels(
+                                    ticker, exp, strike,
+                                    opt_price, vol, direction
+                                )
+
+        except:
+            continue
+
+        time.sleep(0.3)
+
+    time.sleep(5)
