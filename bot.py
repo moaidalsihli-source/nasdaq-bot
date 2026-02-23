@@ -7,13 +7,15 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-for i in range(1, 51):
+names = ["عواطف", "ريمان", "ريماس"]
+
+for name in names:
     data = {
         "chat_id": CHAT_ID,
-        "text": str(i)
+        "text": name
     }
 
     r = requests.post(url, data=data)
-    print(f"Sent {i}:", r.text)
+    print(f"Sent {name}:", r.text)
 
-    time.sleep(1)  # انتظار ثانية بين كل رسالة
+    time.sleep(1)
