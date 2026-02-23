@@ -1,8 +1,8 @@
 import yfinance as yf
+import pandas as pd
 import time
 import pytz
 from datetime import datetime
-import string
 
 # =========================
 # إعدادات
@@ -10,14 +10,14 @@ import string
 MIN_PRICE = 0.06
 MAX_PRICE = 10
 STEP = 3
-BATCH_SIZE = 100   # يفحص 100 كل 10 ثواني
-TOTAL_SYMBOLS = 1000
-
+BATCH_SIZE = 150
 ny = pytz.timezone("America/New_York")
 memory = {}
 
-print("🚀 Mod F-15 NASDAQ 1000 LOADED")
+print("🚀 Mod F-15 PRO NASDAQ + VOLUME LOADED")
 
+# =========================
+# وقت العمل (4AM → 8PM NY)
 # =========================
 def allowed_time():
     now = datetime.now(ny)
@@ -26,34 +26,22 @@ def allowed_time():
     return 4 <= now.hour < 20
 
 # =========================
-# توليد 1000 رمز (1–4 حروف)
+# تحميل شركات ناسداك الحقيقية
 # =========================
-def generate_symbols(limit=1000):
-    letters = string.ascii_uppercase
-    symbols = []
+def get_nasdaq_symbols():
 
-    for a in letters:
-        symbols.append(a)
+    url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+    df = pd.read_csv(url, sep="|")
 
-    for a in letters:
-        for b in letters:
-            symbols.append(a+b)
+    symbols = df["Symbol"].tolist()
 
-    for a in letters:
-        for b in letters:
-            for c in letters:
-                symbols.append(a+b+c)
-
-    for a in letters:
-        for b in letters:
-            for c in letters:
-                for d in letters:
-                    symbols.append(a+b+c+d)
-                    if len(symbols) >= limit:
-                        return symbols
+    # فلتر 3 و 4 أحرف فقط
+    symbols = [s for s in symbols if len(s) in [3,4]]
 
     return symbols
 
+# =========================
+# فحص السهم
 # =========================
 def scan(symbol):
     try:
@@ -82,16 +70,26 @@ def scan(symbol):
         if level not in memory[symbol]:
             memory[symbol].append(level)
 
+            # ===== حساب الفوليوم =====
+            vol_1m = int(data["Volume"].iloc[-1])
+            vol_2m = int(data["Volume"].iloc[-2:].sum())
+            vol_5m = int(data["Volume"].iloc[-5:].sum())
+
             print(f"""
-Mod F-15
+Mod F-15 PRO
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه مستوى {level}%
 ⚪️ الإشارة -> زخم
 {direction}
 
+💰 بدأ من -> {open_price:.4f}$
 📍 الآن -> {current_price:.4f}$
 📈 نسبة التغير -> {change:+.2f}%
+
+📊 1m Vol -> {vol_1m:,}
+📊 2m Vol -> {vol_2m:,}
+📊 5m Vol -> {vol_5m:,}
 
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
@@ -100,17 +98,21 @@ Mod F-15
         pass
 
 # =========================
+# التشغيل الرئيسي
+# =========================
 def main():
 
     print(f"""
-🚀 Mod F-15
+🚀 Mod F-15 PRO
 
 📡 بدأ الآن
-📊 يفحص {TOTAL_SYMBOLS} سهم
+📊 تحميل شركات ناسداك...
 🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
 """)
 
-    symbols = generate_symbols(TOTAL_SYMBOLS)
+    symbols = get_nasdaq_symbols()
+    print(f"📊 تم تحميل {len(symbols)} شركة (3 و 4 أحرف)")
+
     index = 0
 
     while True:
@@ -128,7 +130,7 @@ def main():
         if index >= len(symbols):
             index = 0
 
-        time.sleep(10)  # كل 10 ثواني ينتقل لدفعة جديدة
+        time.sleep(10)
 
 if __name__ == "__main__":
     main()
