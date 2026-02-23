@@ -3,7 +3,11 @@ import requests
 import yfinance as yf
 import time
 import pytz
+import logging
 from datetime import datetime
+
+# ====== إيقاف رسائل yfinance ======
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -12,7 +16,7 @@ MIN_PRICE = 0.06
 MAX_PRICE = 10
 STEP = 3
 BATCH_SIZE = 120
-MIN_5M_VOLUME = 100000  # فلتر احترافي
+MIN_5M_VOLUME = 100000
 
 ny = pytz.timezone("America/New_York")
 memory = {}
@@ -25,13 +29,6 @@ def send_telegram(message):
     except:
         pass
 
-def market_allowed():
-    now = datetime.now(ny)
-    # يوقف فقط السبت والاحد
-    if now.weekday() >= 5:
-        return False
-    return True
-
 def get_nasdaq_symbols():
     url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&exchange=nasdaq&download=true"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -43,7 +40,8 @@ def get_nasdaq_symbols():
 def scan_collect(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        if data.empty:
+
+        if data is None or data.empty:
             return None
 
         open_price = data["Open"].iloc[0]
@@ -60,15 +58,16 @@ def scan_collect(symbol):
 
         if symbol not in memory:
             memory[symbol] = []
+
         if level in memory[symbol]:
             return None
+
         memory[symbol].append(level)
 
         vol_1m = int(data["Volume"].iloc[-1]) if len(data) >= 1 else 0
         vol_2m = int(data["Volume"].iloc[-2:].sum()) if len(data) >= 2 else 0
         vol_5m = int(data["Volume"].iloc[-5:].sum()) if len(data) >= 5 else 0
 
-        # فلتر الفوليوم
         if vol_5m < MIN_5M_VOLUME:
             return None
 
@@ -93,7 +92,7 @@ Mod F-15
 
 🕒 {now_time}
 """
-        return (symbol, message, abs(change))
+        return message
 
     except:
         return None
@@ -107,23 +106,12 @@ def main():
 
     while True:
 
-        if not market_allowed():
-            time.sleep(60)
-            continue
-
         batch = symbols[index:index+BATCH_SIZE]
-        triggered = []
 
         for s in batch:
-            result = scan_collect(s)
-            if result:
-                triggered.append(result)
-
-        # ترتيب حسب اعلى نسبة تغير
-        triggered = sorted(triggered, key=lambda x: x[2], reverse=True)
-
-        for _, message, _ in triggered:
-            send_telegram(message)
+            message = scan_collect(s)
+            if message:
+                send_telegram(message)
 
         index += BATCH_SIZE
         if index >= len(symbols):
