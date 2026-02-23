@@ -5,53 +5,44 @@ import time
 import pytz
 from datetime import datetime
 
-# =========================
-# Railway Environment Variables
-# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 MIN_PRICE = 0.06
 MAX_PRICE = 10
 STEP = 3
-BATCH_SIZE = 100
+BATCH_SIZE = 120
+MIN_5M_VOLUME = 100000  # فلتر احترافي
 
 ny = pytz.timezone("America/New_York")
 memory = {}
 
-# =========================
-# ارسال تيليجرام
-# =========================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
+    data = {"chat_id": CHAT_ID, "text": message}
     try:
         requests.post(url, data=data, timeout=10)
     except:
         pass
 
-# =========================
-# تحميل اسهم ناسداك (4 احرف فقط)
-# =========================
+def market_allowed():
+    now = datetime.now(ny)
+    # يوقف فقط السبت والاحد
+    if now.weekday() >= 5:
+        return False
+    return True
+
 def get_nasdaq_symbols():
     url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&exchange=nasdaq&download=true"
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers)
     data = r.json()
     rows = data["data"]["rows"]
-    symbols = [row["symbol"] for row in rows if len(row["symbol"]) == 4]
-    return symbols
+    return [row["symbol"] for row in rows if len(row["symbol"]) == 4]
 
-# =========================
-# فحص السهم (يرجع بيانات بدل ما يرسل مباشرة)
-# =========================
 def scan_collect(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
-
         if data.empty:
             return None
 
@@ -62,26 +53,27 @@ def scan_collect(symbol):
             return None
 
         change = ((current_price - open_price) / open_price) * 100
-
         if abs(change) < STEP:
             return None
 
         level = int(abs(change) // STEP) * STEP
-        direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
 
         if symbol not in memory:
             memory[symbol] = []
-
         if level in memory[symbol]:
             return None
-
         memory[symbol].append(level)
 
-        vol_1m = int(data["Volume"].iloc[-1]) if len(data) >= 1 else None
-        vol_2m = int(data["Volume"].iloc[-2:].sum()) if len(data) >= 2 else None
-        vol_5m = int(data["Volume"].iloc[-5:].sum()) if len(data) >= 5 else None
+        vol_1m = int(data["Volume"].iloc[-1]) if len(data) >= 1 else 0
+        vol_2m = int(data["Volume"].iloc[-2:].sum()) if len(data) >= 2 else 0
+        vol_5m = int(data["Volume"].iloc[-5:].sum()) if len(data) >= 5 else 0
 
-        now = datetime.now(ny).strftime("%I:%M:%S %p NY")
+        # فلتر الفوليوم
+        if vol_5m < MIN_5M_VOLUME:
+            return None
+
+        direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
+        now_time = datetime.now(ny).strftime("%I:%M:%S %p NY")
 
         message = f"""
 Mod F-15
@@ -94,36 +86,30 @@ Mod F-15
 💰 بدأ من -> {open_price:.2f}$
 📍 الآن -> {current_price:.2f}$
 📈 نسبة التغير -> {change:+.2f}%
+
+📊 1m Vol -> {vol_1m:,}
+📊 2m Vol -> {vol_2m:,}
+📊 5m Vol -> {vol_5m:,}
+
+🕒 {now_time}
 """
-
-        if vol_1m:
-            message += f"\n📊 1m Vol -> {vol_1m:,}"
-        if vol_2m:
-            message += f"\n📊 2m Vol -> {vol_2m:,}"
-        if vol_5m:
-            message += f"\n📊 5m Vol -> {vol_5m:,}"
-
-        message += f"\n\n🕒 {now}"
-
-        # يرجع الرمز + الرسالة + نسبة التغير عشان نرتب
         return (symbol, message, abs(change))
 
     except:
         return None
 
-# =========================
-# التشغيل الرئيسي
-# =========================
 def main():
-
-    now = datetime.now(ny).strftime("%I:%M:%S %p NY")
-    send_telegram(f"🚀 BOT STARTED NOW\n🕒 {now}")
+    now_time = datetime.now(ny).strftime("%I:%M:%S %p NY")
+    send_telegram(f"🚀 BOT STARTED NOW\n🕒 {now_time}")
 
     symbols = get_nasdaq_symbols()
-
     index = 0
 
     while True:
+
+        if not market_allowed():
+            time.sleep(60)
+            continue
 
         batch = symbols[index:index+BATCH_SIZE]
         triggered = []
