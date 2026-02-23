@@ -56,15 +56,28 @@ def send_message(text):
         pass
 
 # ==============================
-# MARKET TIME (للأوبشن فقط)
+# TIME CONTROL
 # ==============================
 
-def market_open():
+def stock_time_allowed():
     now = datetime.now(ny)
+
     if now.weekday() >= 5:
         return False
+
     minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960  # 9:30-16:00
+    return 240 <= minutes <= 1200  # 4:00 AM → 8:00 PM
+
+
+def option_market_open():
+    now = datetime.now(ny)
+
+    if now.weekday() >= 5:
+        return False
+
+    minutes = now.hour * 60 + now.minute
+    return 570 <= minutes <= 960  # 9:30 AM → 4:00 PM
+
 
 # ==============================
 # NASDAQ 4 LETTER
@@ -78,11 +91,15 @@ def get_nasdaq_4():
     df = df[df["Symbol"].str.match(r"^[A-Z]{4}$")]
     return df["Symbol"].tolist()
 
+
 # ==============================
-# STOCK SCAN (3% STEP SYSTEM)
+# STOCK SCAN (3% STEP)
 # ==============================
 
 def scan_stock(ticker):
+
+    if not stock_time_allowed():
+        return
 
     try:
         data = yf.download(
@@ -103,7 +120,6 @@ def scan_stock(ticker):
             return
 
         change = ((price - open_price) / open_price) * 100
-
         step = int(abs(change) // 3) * 3
 
         if step >= 3:
@@ -117,7 +133,6 @@ def scan_stock(ticker):
             if step > stock_levels[key]:
 
                 stock_levels[key] = step
-
                 direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
 
                 message = f"""
@@ -139,13 +154,14 @@ Mod F-15
     except:
         pass
 
+
 # ==============================
 # OPTION SCAN
 # ==============================
 
 def scan_options(ticker):
 
-    if not market_open():
+    if not option_market_open():
         return
 
     try:
@@ -211,6 +227,7 @@ Mod F-15 OPTIONS
 
     except:
         pass
+
 
 # ==============================
 # START
