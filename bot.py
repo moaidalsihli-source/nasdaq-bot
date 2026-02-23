@@ -5,7 +5,7 @@ import pandas as pd
 import pytz
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
@@ -17,7 +17,7 @@ TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 if not TOKEN or not CHAT_ID:
-    print("❌ TOKEN OR CHAT_ID NOT FOUND!")
+    print("TOKEN OR CHAT_ID NOT FOUND")
     exit()
 
 ny = pytz.timezone("America/New_York")
@@ -28,14 +28,18 @@ ny = pytz.timezone("America/New_York")
 
 MIN_PRICE = 0.07
 MAX_PRICE = 15
-LEVEL_PERCENT = 3
 DELAY = 1
 OPTION_INTERVAL = 60
-OPTION_LEVELS = [25, 50, 100, 200, 400]
 
-bad_tickers = set()
+OPTION_LEVELS = [
+    5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
+    125, 150, 175, 200,
+    250, 300, 350, 400, 450, 500, 550, 600,
+    650, 700, 750, 800, 850, 900, 950, 1000
+]
+
+stock_levels = {}
 option_memory = {}
-last_alert_time_stock = {}
 last_option_scan = 0
 
 # ==============================
@@ -52,7 +56,7 @@ def send_message(text):
         pass
 
 # ==============================
-# MARKET TIME
+# MARKET TIME (للأوبشن فقط)
 # ==============================
 
 def market_open():
@@ -60,7 +64,7 @@ def market_open():
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
-    return 570 <= minutes <= 960
+    return 570 <= minutes <= 960  # 9:30-16:00
 
 # ==============================
 # NASDAQ 4 LETTER
@@ -75,17 +79,10 @@ def get_nasdaq_4():
     return df["Symbol"].tolist()
 
 # ==============================
-# STOCK SCAN
+# STOCK SCAN (3% STEP SYSTEM)
 # ==============================
 
 def scan_stock(ticker):
-
-    if ticker in bad_tickers:
-        return
-
-    if ticker in last_alert_time_stock:
-        if datetime.now() - last_alert_time_stock[ticker] < timedelta(minutes=10):
-            return
 
     try:
         data = yf.download(
@@ -96,8 +93,7 @@ def scan_stock(ticker):
             threads=False
         )
 
-        if data.empty or len(data) < 20:
-            bad_tickers.add(ticker)
+        if data.empty:
             return
 
         price = float(data["Close"].iloc[-1])
@@ -106,55 +102,42 @@ def scan_stock(ticker):
         if not (MIN_PRICE <= price <= MAX_PRICE):
             return
 
-        daily_change = ((price - open_price) / open_price) * 100
+        change = ((price - open_price) / open_price) * 100
 
-        data["EMA9"] = data["Close"].ewm(span=9).mean()
-        data["EMA20"] = data["Close"].ewm(span=20).mean()
+        step = int(abs(change) // 3) * 3
 
-        ema9 = float(data["EMA9"].iloc[-1])
-        ema20 = float(data["EMA20"].iloc[-1])
+        if step >= 3:
 
-        data["VWAP"] = (data["Close"] * data["Volume"]).cumsum() / data["Volume"].cumsum()
-        vwap = float(data["VWAP"].iloc[-1])
+            direction = "UP" if change > 0 else "DOWN"
+            key = f"{ticker}_{direction}"
 
-        vol_now = int(data["Volume"].iloc[-1])
-        avg_vol = int(data["Volume"].iloc[-20:].mean())
+            if key not in stock_levels:
+                stock_levels[key] = 0
 
-        if avg_vol == 0:
-            return
+            if step > stock_levels[key]:
 
-        volume_spike = vol_now > avg_vol * 2
+                stock_levels[key] = step
 
-        trend_up = ema9 > ema20 and price > vwap
-        trend_down = ema9 < ema20 and price < vwap
+                direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
 
-        if abs(daily_change) >= LEVEL_PERCENT and volume_spike:
+                message = f"""
+Mod F-15
 
-            if daily_change > 0 and trend_up:
-                direction = "🟢 صاعد قوي"
-            elif daily_change < 0 and trend_down:
-                direction = "🔴 هابط قوي"
-            else:
-                return
+🔸 الرمز -> {ticker}
+🚨 تنبيه مستوى {step}%
+⚪️ الإشارة -> زخم
+{direction_icon}
 
-            message = f"""
-🔸 {ticker}
-🚨 Institutional Momentum
-
-📈 الاتجاه -> {direction}
-💰 السعر -> {round(price,2)}$ ({round(daily_change,2)}%)
-
-🔥 Volume Spike x{round(vol_now/avg_vol,1)}
-📊 EMA9 > EMA20: {ema9 > ema20}
-📊 Above VWAP: {price > vwap}
+💰 بدأ من -> {round(open_price,2)}$
+📍 الآن -> {round(price,2)}$
+📈 نسبة التغير -> {round(change,2)}%
 
 🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
 """
-            send_message(message)
-            last_alert_time_stock[ticker] = datetime.now()
+                send_message(message)
 
     except:
-        bad_tickers.add(ticker)
+        pass
 
 # ==============================
 # OPTION SCAN
@@ -205,24 +188,26 @@ def scan_options(ticker):
 
                         if gain >= level and option_memory[key]["last_level"] < level:
 
+                            option_memory[key]["last_level"] = level
                             direction = "🟢" if opt_type == "CALL" else "🔴"
 
                             message = f"""
-🔸 {ticker}
-{direction} {opt_type} OPTION
+Mod F-15 OPTIONS
 
-📌 Strike: {strike}
-💲 Entry: {round(entry,2)}
-💲 Current: {round(float(last_price),2)}
+🔸 الرمز -> {ticker}
+{direction} {opt_type} OPTION LEVEL HIT
 
-🚀 +{level}% HIT
-📈 Gain: +{round(gain,1)}%
-🔥 Volume: {int(volume):,}
+📅 تاريخ العقد -> {exp}
+📌 Strike -> {strike}
 
+💲 دخول -> {round(entry,2)}$
+💲 الآن -> {round(float(last_price),2)}$
+🚀 نسبة الربح -> +{round(gain,1)}%
+
+🔥 حجم العقود -> {int(volume):,}
 🕒 {datetime.now(ny).strftime("%I:%M %p")} NY
 """
                             send_message(message)
-                            option_memory[key]["last_level"] = level
 
     except:
         pass
@@ -231,8 +216,8 @@ def scan_options(ticker):
 # START
 # ==============================
 
-print("🚀 ELITE NASDAQ SCANNER STARTED")
-send_message("🚀 ELITE NASDAQ SCANNER STARTED")
+print("🚀 Mod F-15 SCANNER STARTED")
+send_message("🚀 Mod F-15 SCANNER STARTED")
 
 tickers = get_nasdaq_4()
 stock_index = 0
@@ -247,8 +232,7 @@ while True:
 
     scan_stock(ticker)
 
-    if market_open() and time.time() - last_option_scan >= OPTION_INTERVAL:
-
+    if time.time() - last_option_scan >= OPTION_INTERVAL:
         opt_ticker = tickers[option_index]
         option_index += 1
         if option_index >= len(tickers):
