@@ -6,7 +6,7 @@ import pytz
 from datetime import datetime
 
 # =========================
-# Environment Variables (Railway)
+# Railway Environment Variables
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -34,7 +34,7 @@ def send_telegram(message):
         pass
 
 # =========================
-# تحميل شركات ناسداك
+# تحميل اسهم ناسداك (4 احرف فقط)
 # =========================
 def get_nasdaq_symbols():
     url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&exchange=nasdaq&download=true"
@@ -42,41 +42,41 @@ def get_nasdaq_symbols():
     r = requests.get(url, headers=headers)
     data = r.json()
     rows = data["data"]["rows"]
-    return [row["symbol"] for row in rows if len(row["symbol"]) in [3,4]]
+    symbols = [row["symbol"] for row in rows if len(row["symbol"]) == 4]
+    return symbols
 
 # =========================
-# فحص السهم
+# فحص السهم (يرجع بيانات بدل ما يرسل مباشرة)
 # =========================
-def scan(symbol):
+def scan_collect(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
 
         if data.empty:
-            return
+            return None
 
         open_price = data["Open"].iloc[0]
         current_price = data["Close"].iloc[-1]
 
         if not (MIN_PRICE <= current_price <= MAX_PRICE):
-            return
+            return None
 
         change = ((current_price - open_price) / open_price) * 100
 
         if abs(change) < STEP:
-            return
+            return None
 
         level = int(abs(change) // STEP) * STEP
-        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+        direction_icon = "🟢 صاعد" if change > 0 else "🔴 هابط"
 
         if symbol not in memory:
             memory[symbol] = []
 
         if level in memory[symbol]:
-            return
+            return None
 
         memory[symbol].append(level)
 
-        # ===== Volume (بدون كتابة 0) =====
         vol_1m = int(data["Volume"].iloc[-1]) if len(data) >= 1 else None
         vol_2m = int(data["Volume"].iloc[-2:].sum()) if len(data) >= 2 else None
         vol_5m = int(data["Volume"].iloc[-5:].sum()) if len(data) >= 5 else None
@@ -88,25 +88,28 @@ Mod F-15
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه مستوى {level}%
-{direction}
+⚪️ الإشارة -> زخم
+{direction_icon}
 
-📍 السعر -> {current_price:.4f}$
-📈 التغير -> {change:+.2f}%
+💰 بدأ من -> {open_price:.2f}$
+📍 الآن -> {current_price:.2f}$
+📈 نسبة التغير -> {change:+.2f}%
 """
 
-        if vol_1m is not None:
+        if vol_1m:
             message += f"\n📊 1m Vol -> {vol_1m:,}"
-        if vol_2m is not None:
+        if vol_2m:
             message += f"\n📊 2m Vol -> {vol_2m:,}"
-        if vol_5m is not None:
+        if vol_5m:
             message += f"\n📊 5m Vol -> {vol_5m:,}"
 
         message += f"\n\n🕒 {now}"
 
-        send_telegram(message)
+        # يرجع الرمز + الرسالة + نسبة التغير عشان نرتب
+        return (symbol, message, abs(change))
 
     except:
-        pass
+        return None
 
 # =========================
 # التشغيل الرئيسي
@@ -123,9 +126,18 @@ def main():
     while True:
 
         batch = symbols[index:index+BATCH_SIZE]
+        triggered = []
 
         for s in batch:
-            scan(s)
+            result = scan_collect(s)
+            if result:
+                triggered.append(result)
+
+        # ترتيب حسب اعلى نسبة تغير
+        triggered = sorted(triggered, key=lambda x: x[2], reverse=True)
+
+        for _, message, _ in triggered:
+            send_telegram(message)
 
         index += BATCH_SIZE
         if index >= len(symbols):
