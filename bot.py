@@ -1,28 +1,48 @@
+import os
+import requests
 import yfinance as yf
-import pandas as pd
 import time
 import pytz
 from datetime import datetime
 
 # =========================
-# إعدادات
+# Environment Variables (Railway)
 # =========================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+
 MIN_PRICE = 0.06
 MAX_PRICE = 10
-STEP = 2
-BATCH_SIZE = 120
+STEP = 3
+BATCH_SIZE = 100
+
 ny = pytz.timezone("America/New_York")
 memory = {}
+
+# =========================
+# ارسال تيليجرام
+# =========================
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    try:
+        requests.post(url, data=data, timeout=10)
+    except:
+        pass
 
 # =========================
 # تحميل شركات ناسداك
 # =========================
 def get_nasdaq_symbols():
-    url = "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
-    df = pd.read_csv(url, sep="|")
-    symbols = df["Symbol"].tolist()
-    symbols = [s for s in symbols if len(s) in [3,4]]
-    return symbols
+    url = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&exchange=nasdaq&download=true"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers)
+    data = r.json()
+    rows = data["data"]["rows"]
+    return [row["symbol"] for row in rows if len(row["symbol"]) in [3,4]]
 
 # =========================
 # فحص السهم
@@ -51,41 +71,39 @@ def scan(symbol):
         if symbol not in memory:
             memory[symbol] = []
 
-        if level not in memory[symbol]:
-            memory[symbol].append(level)
+        if level in memory[symbol]:
+            return
 
-            # ===== Volume مع حماية =====
-            try:
-                vol_1m = int(data["Volume"].iloc[-1])
-            except:
-                vol_1m = 0
+        memory[symbol].append(level)
 
-            try:
-                vol_2m = int(data["Volume"].iloc[-2:].sum())
-            except:
-                vol_2m = 0
+        # ===== Volume (بدون كتابة 0) =====
+        vol_1m = int(data["Volume"].iloc[-1]) if len(data) >= 1 else None
+        vol_2m = int(data["Volume"].iloc[-2:].sum()) if len(data) >= 2 else None
+        vol_5m = int(data["Volume"].iloc[-5:].sum()) if len(data) >= 5 else None
 
-            try:
-                vol_5m = int(data["Volume"].iloc[-5:].sum())
-            except:
-                vol_5m = 0
+        now = datetime.now(ny).strftime("%I:%M:%S %p NY")
 
-            print(f"""
+        message = f"""
 Mod F-15
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه مستوى {level}%
 {direction}
 
-📍 الآن -> {current_price:.4f}$
-📈 نسبة التغير -> {change:+.2f}%
+📍 السعر -> {current_price:.4f}$
+📈 التغير -> {change:+.2f}%
+"""
 
-📊 1m Vol -> {vol_1m:,}
-📊 2m Vol -> {vol_2m:,}
-📊 5m Vol -> {vol_5m:,}
+        if vol_1m is not None:
+            message += f"\n📊 1m Vol -> {vol_1m:,}"
+        if vol_2m is not None:
+            message += f"\n📊 2m Vol -> {vol_2m:,}"
+        if vol_5m is not None:
+            message += f"\n📊 5m Vol -> {vol_5m:,}"
 
-🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}
-""")
+        message += f"\n\n🕒 {now}"
+
+        send_telegram(message)
 
     except:
         pass
@@ -95,12 +113,10 @@ Mod F-15
 # =========================
 def main():
 
-    print("🚀 BOT STARTED NOW")
-    print(f"🕒 {datetime.now(ny).strftime('%I:%M:%S %p NY')}")
-    print("📊 تحميل شركات ناسداك...")
+    now = datetime.now(ny).strftime("%I:%M:%S %p NY")
+    send_telegram(f"🚀 BOT STARTED NOW\n🕒 {now}")
 
     symbols = get_nasdaq_symbols()
-    print(f"✅ تم تحميل {len(symbols)} شركة")
 
     index = 0
 
