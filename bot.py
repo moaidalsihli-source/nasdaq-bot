@@ -6,7 +6,6 @@ import pytz
 import time
 import random
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 
 # =============================
 # ENV
@@ -22,7 +21,13 @@ if not TOKEN or not CHAT_ID:
 ny = pytz.timezone("America/New_York")
 
 stock_levels = {}
-option_levels = {}
+
+# =============================
+# ALERT CONTROL (45 SECONDS)
+# =============================
+
+last_alert_time = 0
+ALERT_INTERVAL = 45  # seconds
 
 # =============================
 # MARKET TIME
@@ -30,10 +35,8 @@ option_levels = {}
 
 def market_is_open():
     now = datetime.now(ny)
-
     if now.weekday() >= 5:
         return False
-
     minutes = now.hour * 60 + now.minute
     return 570 <= minutes <= 960  # 9:30 - 16:00
 
@@ -74,28 +77,30 @@ print("Clean symbols:", len(all_tickers))
 # =============================
 
 def send_message(text):
+    global last_alert_time
+
+    now = time.time()
+
+    # يمنع الإرسال قبل مرور 45 ثانية
+    if now - last_alert_time < ALERT_INTERVAL:
+        return
+
     try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text}
+            data={
+                "chat_id": CHAT_ID,
+                "text": text
+            }
         )
-    except:
-        pass
 
-def send_startup():
-    now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
-    send_message(f"""
-🚀 NASDAQ SCANNER STARTED
+        last_alert_time = now
 
-📊 Stocks: 3% then +3%
-📑 Options: 25% then +10%
-🕒 {now_ny} NY
-""")
-
-send_startup()
+    except Exception as e:
+        print("Telegram Error:", e)
 
 # =============================
-# STOCK ALERT
+# STOCK CHECK
 # =============================
 
 def check_stock(ticker, price, change, accel):
@@ -119,7 +124,7 @@ def check_stock(ticker, price, change, accel):
     header = "BREAKOUT" if change > 0 else "BREAKDOWN"
     now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
 
-    send_message(f"""
+    message = f"""
 🔸 {ticker}
 {direction} STOCK {header}
 
@@ -128,114 +133,66 @@ def check_stock(ticker, price, change, accel):
 🎯 Level {level}%
 ⚡ Accel {round(accel,2)}
 
-🕒 {now_ny}
-""")
+🕒 {now_ny} NY
+"""
+
+    send_message(message)
 
 # =============================
-# OPTION ALERT
+# MAIN LOOP (EVERY 30s SCAN)
 # =============================
 
-def check_option(ticker, exp, strike, current_price, volume, direction):
-
-    key = f"{ticker}_{strike}_{exp}"
-
-    if key not in option_levels:
-        option_levels[key] = {
-            "entry": current_price,
-            "last": 0
-        }
-        return
-
-    entry = option_levels[key]["entry"]
-    last = option_levels[key]["last"]
-
-    change = ((current_price - entry) / entry) * 100
-
-    if last == 0 and change >= 25:
-        level = 25
-    elif last >= 25 and change >= last + 10:
-        level = last + 10
-    else:
-        return
-
-    option_levels[key]["last"] = level
-
-    color = "🟢 CALL" if direction == "CALL" else "🔴 PUT"
-    now_ny = datetime.now(ny).strftime("%I:%M:%S %p")
-
-    send_message(f"""
-🔸 {ticker}
-{color} OPTION
-
-📅 {exp}
-📌 Strike {strike}
-💲 Entry {round(entry,2)}
-💲 Now {round(current_price,2)}
-🚀 +{level}%
-🔥 Vol {int(volume)}
-
-🕒 {now_ny}
-""")
-
-# =============================
-# SCAN ONE STOCK
-# =============================
-
-def scan_stock(ticker):
-
-    try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period="1d", interval="1m", prepost=False)
-
-        if len(data) < 5:
-            return
-
-        price = data["Close"].iloc[-1]
-        open_price = data["Open"].iloc[0]
-        change = ((price - open_price) / open_price) * 100
-        accel = ((price - data["Close"].iloc[-4]) / data["Close"].iloc[-4]) * 100
-
-        if not (0.07 <= price <= 10):
-            return
-
-        check_stock(ticker, price, change, accel)
-
-        if not market_is_open():
-            return
-
-        direction = "CALL" if change > 0 else "PUT"
-
-        for exp in stock.options[:2]:  # فقط أقرب تاريخين
-            chain = stock.option_chain(exp)
-            options = chain.calls if direction == "CALL" else chain.puts
-
-            for _, row in options.iterrows():
-
-                opt_price = row["lastPrice"]
-                strike = row["strike"]
-                vol = row["volume"]
-
-                if pd.isna(opt_price) or pd.isna(vol):
-                    continue
-
-                if 0.05 <= opt_price <= 0.50 and vol > 50:
-                    check_option(
-                        ticker, exp, strike,
-                        opt_price, vol, direction
-                    )
-
-    except Exception as e:
-        print(f"Error {ticker}: {e}")
-
-# =============================
-# MAIN LOOP
-# =============================
+SCAN_INTERVAL = 30  # الفحص كل 30 ثانية
 
 while True:
 
-    sample = random.sample(all_tickers, 250)
+    cycle_start = time.time()
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        executor.map(scan_stock, sample)
+    # اختيار 200 سهم عشوائي لتخفيف الضغط
+    sample = random.sample(all_tickers, 200)
 
-    time.sleep(15)
+    try:
+        data = yf.download(
+            tickers=" ".join(sample),
+            period="1d",
+            interval="1m",
+            group_by="ticker",
+            threads=True,
+            progress=False
+        )
+
+        for ticker in sample:
+
+            try:
+                if ticker not in data:
+                    continue
+
+                df = data[ticker]
+
+                if len(df) < 5:
+                    continue
+
+                price = df["Close"].iloc[-1]
+                open_price = df["Open"].iloc[0]
+
+                if open_price == 0:
+                    continue
+
+                change = ((price - open_price) / open_price) * 100
+                accel = ((price - df["Close"].iloc[-4]) / df["Close"].iloc[-4]) * 100
+
+                if 0.07 <= price <= 10:
+                    check_stock(ticker, price, change, accel)
+
+            except:
+                continue
+
+    except Exception as e:
+        print("Download Error:", e)
+
+    # ضبط توقيت 30 ثانية
+    cycle_time = time.time() - cycle_start
+    sleep_time = SCAN_INTERVAL - cycle_time
+
+    if sleep_time > 0:
+        time.sleep(sleep_time)
