@@ -1,9 +1,16 @@
 import yfinance as yf
+import requests
 import time
 import pytz
 from datetime import datetime
 import pandas as pd
-import os
+import numpy as np
+
+# =========================
+# TELEGRAM SETTINGS
+# =========================
+TELEGRAM_TOKEN = "PUT_TOKEN_HERE"
+CHAT_ID = "PUT_CHAT_ID_HERE"
 
 # =========================
 # SETTINGS
@@ -22,9 +29,15 @@ NASDAQ_SYMBOLS_URL = "https://old.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.t
 ny = pytz.timezone("America/New_York")
 
 stock_alert_count = {}
-option_entry_price = {}
+option_alert_levels = {}
 
-print("🚀 Mod F-15 SCANNER STARTED")
+# =========================
+# TELEGRAM FUNCTION
+# =========================
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message}
+    requests.post(url, data=data)
 
 # =========================
 # GET NASDAQ 4 LETTER SYMBOLS
@@ -36,7 +49,7 @@ def get_nasdaq_symbols():
     return symbols
 
 # =========================
-# TIME CHECK
+# CHECK MARKET TIME
 # =========================
 def is_regular_market():
     now = datetime.now(ny)
@@ -57,7 +70,6 @@ def scan_stock(symbol):
     try:
         ticker = yf.Ticker(symbol)
         data = ticker.history(period="1d", interval="1m")
-
         if len(data) < 5:
             return
 
@@ -65,7 +77,7 @@ def scan_stock(symbol):
         open_price = data["Open"].iloc[0]
         change_pct = ((price - open_price) / open_price) * 100
 
-        if not (MIN_STOCK_PRICE <= price <= MAX_STOCK_PRICE):
+        if price < MIN_STOCK_PRICE or price > MAX_STOCK_PRICE:
             return
 
         if change_pct >= 3:
@@ -74,7 +86,7 @@ def scan_stock(symbol):
 
             direction = "🟢 صاعد" if change_pct > 0 else "🔴 هابط"
 
-            print(f"""
+            message = f"""
 Mod F-15
 
 🔸 الرمز -> {symbol}
@@ -87,7 +99,8 @@ Mod F-15
 📈 نسبة الصعود -> {change_pct:.2f}%
 
 🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
-""")
+"""
+            send_telegram(message)
 
     except:
         pass
@@ -108,6 +121,7 @@ def scan_options(symbol):
             calls = chain.calls
 
             for _, row in calls.iterrows():
+
                 price = row["lastPrice"]
                 strike = row["strike"]
                 delta = row.get("delta", None)
@@ -123,18 +137,15 @@ def scan_options(symbol):
                 ):
 
                     key = f"{symbol}_{strike}_{exp}"
+                    entry_price = option_alert_levels.get(key, price)
 
-                    if key not in option_entry_price:
-                        option_entry_price[key] = price
-
-                    entry = option_entry_price[key]
-                    gain = ((price - entry) / entry) * 100
+                    gain = ((price - entry_price) / entry_price) * 100
 
                     levels = [5,10,20,30,40,50,75,100,150,200,300,400,500,750,1000]
 
                     for lvl in levels:
                         if gain >= lvl:
-                            print(f"""
+                            message = f"""
 Mod F-15 OPTIONS
 
 🔸 {symbol}
@@ -142,13 +153,15 @@ Mod F-15 OPTIONS
 
 📅 Exp -> {exp}
 📌 Strike -> {strike}
-💲 Entry -> {entry:.2f}
+💲 Entry -> {entry_price:.2f}
 💲 Current -> {price:.2f}
 🚀 +{gain:.0f}%
 
 🔥 Volume -> {int(volume)}
 🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
-""")
+"""
+                            send_telegram(message)
+                            option_alert_levels[key] = entry_price
                             break
 
     except:
@@ -158,16 +171,16 @@ Mod F-15 OPTIONS
 # MAIN LOOP
 # =========================
 def main():
+    send_telegram("🚀 Mod F-15 SCANNER STARTED")
+
     symbols = get_nasdaq_symbols()
 
     while True:
         for symbol in symbols:
             if is_extended_market():
                 scan_stock(symbol)
-
             scan_options(symbol)
-
-            time.sleep(1)  # 1 symbol per second
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
