@@ -1,111 +1,215 @@
+import os
+import requests
 import yfinance as yf
-import time
-import pytz
-from datetime import datetime
 import pandas as pd
+import pytz
+import time
+from datetime import datetime
 
-# =========================
-# SETTINGS
-# =========================
-MIN_STOCK_PRICE = 0.20
-MAX_STOCK_PRICE = 10
+# =============================
+# ENV
+# =============================
+
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+if not TOKEN or not CHAT_ID:
+    print("❌ TOKEN OR CHAT_ID NOT FOUND!")
+    exit()
 
 ny = pytz.timezone("America/New_York")
 
-stock_alert_count = {}
+last_alert_time = 0
+ALERT_INTERVAL = 30
 
-print("🚀 Mod F-15 PRO SCANNER STARTED")
+option_levels = {}
 
-# =========================
-# GET LARGE US STOCK LIST (~3000+)
-# =========================
-def get_stock_universe():
-    # قائمة كبيرة من الأسهم الأمريكية الشائعة
-    tickers = yf.Tickers("^GSPC ^IXIC ^RUT")
-    
-    # نستخدم Screener بسيط
-    sp500 = yf.download("^GSPC", period="1d")
-    
-    # بديل آمن: استخدام قائمة موسعة
-    symbols = []
+# =============================
+# TELEGRAM
+# =============================
 
-    # نحمل قائمة Russell تقريبية من yfinance
-    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        for second in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            symbols.append(letter + second)
+def send_message(text):
+    global last_alert_time
+    now = time.time()
 
-    # فلترة رموز 2-4 حروف تقريباً
-    symbols = [s for s in symbols if 2 <= len(s) <= 4]
+    if now - last_alert_time < ALERT_INTERVAL:
+        return
 
-    return symbols[:3000]  # نحدد 3000 سهم فقط
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text}
+        )
+        last_alert_time = now
+    except Exception as e:
+        print("Telegram Error:", e)
 
-# =========================
-# TIME CHECK
-# =========================
-def is_extended_market():
+# =============================
+# MARKET TIME
+# =============================
+
+def market_is_open():
     now = datetime.now(ny)
     if now.weekday() >= 5:
         return False
-    return 4 <= now.hour < 20
+    minutes = now.hour * 60 + now.minute
+    return 570 <= minutes <= 960  # 9:30 - 16:00 NY
 
-# =========================
-# STOCK SCANNER (LIGHT & FAST)
-# =========================
-def scan_stock(symbol):
-    try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d", interval="1m")
+# =============================
+# NASDAQ LIST
+# =============================
 
-        if len(data) < 25:
-            return
+def get_nasdaq():
+    url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
+    df = pd.read_csv(url, sep="|")
+    df = df[df["Test Issue"] == "N"]
+    df = df[df["ETF"] == "N"]
+    return df["Symbol"].tolist()
 
-        price_now = data["Close"].iloc[-1]
-        price_5min = data["Close"].iloc[-6]
+print("🚀 BOT STARTED NOW")
+send_message("🚀 BOT STARTED NOW")
 
-        change_5min = ((price_now - price_5min) / price_5min) * 100
+all_tickers = get_nasdaq()
+ticker_index = 0
 
-        volume_now = data["Volume"].iloc[-1]
-        avg_volume = data["Volume"].rolling(20).mean().iloc[-1]
-
-        if not (MIN_STOCK_PRICE <= price_now <= MAX_STOCK_PRICE):
-            return
-
-        if change_5min >= 1 and volume_now > avg_volume:
-
-            count = stock_alert_count.get(symbol, 0) + 1
-            stock_alert_count[symbol] = count
-
-            print(f"""
-Mod F-15 PRO
-
-🔸 {symbol}
-🚨 Alert #{count}
-🟢 Early Momentum
-
-📍 Price -> {price_now:.2f}$
-📈 5min Move -> {change_5min:.2f}%
-📊 Volume Surge
-
-🕒 {datetime.now(ny).strftime('%I:%M %p NY')}
-""")
-
-    except:
-        pass
-
-# =========================
+# =============================
 # MAIN LOOP
-# =========================
-def main():
-    symbols = get_stock_universe()
-    print(f"Loaded {len(symbols)} symbols")
+# =============================
 
-    while True:
-        if is_extended_market():
-            for symbol in symbols:
-                scan_stock(symbol)
-                time.sleep(0.3)  # أسرع من قبل
-        else:
-            time.sleep(60)
+while True:
 
-if __name__ == "__main__":
-    main()
+    ticker = all_tickers[ticker_index]
+    ticker_index = (ticker_index + 1) % len(all_tickers)
+
+    try:
+        data = yf.download(ticker, period="1d", interval="1m", progress=False)
+
+        if len(data) < 10:
+            time.sleep(1)
+            continue
+
+        price = data["Close"].iloc[-1]
+        open_price = data["Open"].iloc[0]
+
+        if open_price == 0:
+            time.sleep(1)
+            continue
+
+        change = ((price - open_price) / open_price) * 100
+        accel = ((price - data["Close"].iloc[-4]) / data["Close"].iloc[-4]) * 100
+
+        vol_1m = data["Volume"].iloc[-1]
+        vol_2m = data["Volume"].tail(2).sum()
+        vol_5m = data["Volume"].tail(5).sum()
+
+        # =============================
+        # STOCK FILTER (0.07 - 20$)
+        # =============================
+
+        if 0.07 <= price <= 20 and abs(change) >= 3:
+
+            # Momentum classification
+            if change >= 12:
+                momentum = "🔥 Explosive"
+            elif change >= 8:
+                momentum = "🚀 Powerful Move"
+            elif change >= 5:
+                momentum = "🟢 Strong Momentum"
+            elif change >= 3:
+                momentum = "⚠️ Momentum"
+            elif change <= -8:
+                momentum = "💣 Heavy Selloff"
+            elif change <= -3:
+                momentum = "🔻 Bearish Pressure"
+            else:
+                momentum = ""
+
+            direction = "🟢" if change > 0 else "🔴"
+            header = "BREAKOUT" if change > 0 else "BREAKDOWN"
+
+            message = f"""
+🔸 {ticker}
+{direction} STOCK {header}
+
+💰 Price: {round(price,2)}$
+📈 Move: {round(change,2)}%
+⚡ 3m Accel: {round(accel,2)}%
+
+📊 1m Vol: {int(vol_1m):,}
+📊 2m Vol: {int(vol_2m):,}
+📊 5m Vol: {int(vol_5m):,}
+
+🎯 {momentum}
+🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
+"""
+            send_message(message)
+
+        # =============================
+        # OPTIONS (MARKET HOURS ONLY)
+        # =============================
+
+        if market_is_open():
+
+            stock = yf.Ticker(ticker)
+
+            for exp in stock.options:
+
+                opt_chain = stock.option_chain(exp)
+
+                for opt_type, df_opt in [("CALL", opt_chain.calls), ("PUT", opt_chain.puts)]:
+
+                    for _, row in df_opt.iterrows():
+
+                        strike = row["strike"]
+                        last_price = row["lastPrice"]
+                        volume = row["volume"]
+                        oi = row["openInterest"]
+
+                        if last_price is None:
+                            continue
+
+                        if not (0.05 <= last_price <= 0.50):
+                            continue
+
+                        if strike > 100:
+                            continue
+
+                        if volume is None or volume < 5000:
+                            continue
+
+                        if oi is None or oi < 3000:
+                            continue
+
+                        key = f"{ticker}_{strike}_{exp}_{opt_type}"
+
+                        if key not in option_levels:
+                            option_levels[key] = last_price
+                            continue
+
+                        entry = option_levels[key]
+                        gain = ((last_price - entry) / entry) * 100
+
+                        if gain >= 25:
+
+                            direction = "🟢" if opt_type == "CALL" else "🔴"
+
+                            message = f"""
+🔸 {ticker}
+{direction} {opt_type} OPTION LEVEL HIT
+
+📅 Exp: {exp}
+📌 Strike: {strike}
+💲 Entry: {round(entry,2)}
+💲 Current: {round(last_price,2)}
+🚀 +{round(gain,1)}%
+
+🔥 Option Volume: {int(volume)}
+🕒 {datetime.now(ny).strftime("%I:%M:%S %p")} NY
+"""
+                            send_message(message)
+                            option_levels[key] = last_price
+
+    except Exception as e:
+        print("Error:", e)
+
+    time.sleep(1)
