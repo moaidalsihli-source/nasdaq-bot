@@ -27,8 +27,11 @@ ny = pytz.timezone("America/New_York")
 # =============================
 # SETTINGS
 # =============================
-DELAY = 1          # 1 سهم كل 1 ثانية
-ALERT_INTERVAL = 5 # منع سبام تلغرام
+DELAY = 1
+ALERT_INTERVAL = 5
+MIN_PRICE = 0.07
+MAX_PRICE = 20
+CHANGE_THRESHOLD = 3
 
 last_alert_time = 0
 option_levels = {}
@@ -64,7 +67,7 @@ def market_is_open():
     return 570 <= minutes <= 960  # 9:30 - 16:00 NY
 
 # =============================
-# NASDAQ CLEAN LIST
+# NASDAQ ONLY CLEAN LIST
 # =============================
 def get_nasdaq():
     url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
@@ -72,9 +75,6 @@ def get_nasdaq():
 
     df = df[df["Test Issue"] == "N"]
     df = df[df["ETF"] == "N"]
-
-    df = df[~df["Symbol"].str.contains(r"\^|W$|R$|P$|U$")]
-    df = df[~df["Symbol"].str.contains(r"\.|-")]
     df = df[df["Symbol"].str.match(r"^[A-Z]+$")]
 
     return df["Symbol"].tolist()
@@ -85,10 +85,9 @@ def get_nasdaq():
 def check_options(ticker):
     try:
         stock = yf.Ticker(ticker)
-        expirations = stock.options[:1]  # أول تاريخ فقط لتقليل الضغط
+        expirations = stock.options[:1]
 
         for exp in expirations:
-
             chain = stock.option_chain(exp)
 
             for opt_type, df_opt in [("CALL", chain.calls), ("PUT", chain.puts)]:
@@ -119,7 +118,6 @@ def check_options(ticker):
                     gain = ((float(last_price) - entry) / entry) * 100
 
                     if gain >= 25:
-
                         direction = "🟢" if opt_type == "CALL" else "🔴"
 
                         message = f"""
@@ -183,7 +181,7 @@ while True:
 
         change = ((price - open_price) / open_price) * 100
 
-        if 0.07 <= price <= 20 and abs(change) >= 3:
+        if MIN_PRICE <= price <= MAX_PRICE and abs(change) >= CHANGE_THRESHOLD:
 
             direction = "🟢" if change > 0 else "🔴"
             header = "BREAKOUT" if change > 0 else "BREAKDOWN"
