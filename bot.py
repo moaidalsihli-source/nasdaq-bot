@@ -17,8 +17,11 @@ MIN_CHANGE = 3
 MIN_VOLUME = 150000
 MAX_PRICE = 20
 
-# عداد تنبيه خاص لكل سهم
+# عداد تنبيه مستقل لكل سهم
 symbol_alert_counter = {}
+
+# تاريخ اليوم لمتابعة التصفير
+today_date = datetime.now().date()
 
 # تحميل قائمة ناسداك
 SYMBOLS = pd.read_csv(
@@ -86,13 +89,18 @@ def scan_market():
 
 while True:
 
+    # تصفير العدادات يومياً
+    if datetime.now().date() != today_date:
+        symbol_alert_counter.clear()
+        today_date = datetime.now().date()
+
     print("Scanning...")
 
     alerts = scan_market()
 
     for symbol, price, change, v1, v2, v5 in alerts:
 
-        # إذا أول مرة يظهر السهم
+        # عداد مستقل لكل سهم
         if symbol not in symbol_alert_counter:
             symbol_alert_counter[symbol] = 1
         else:
@@ -120,4 +128,4 @@ while True:
         send_telegram(message)
         time.sleep(1)
 
-    time.sleep(INTERVAL)ض
+    time.sleep(INTERVAL)
