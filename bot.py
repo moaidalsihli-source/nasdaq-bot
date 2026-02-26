@@ -17,10 +17,7 @@ MIN_CHANGE = 3
 MIN_VOLUME = 150000
 MAX_PRICE = 20
 
-# عداد تنبيه مستقل لكل سهم
 symbol_alert_counter = {}
-
-# تاريخ اليوم لمتابعة التصفير
 today_date = datetime.now().date()
 
 # تحميل قائمة ناسداك
@@ -37,7 +34,15 @@ def send_telegram(text):
     }
     requests.post(url, data=payload)
 
-def scan_market():
+while True:
+
+    # تصفير العدادات يومياً
+    if datetime.now().date() != today_date:
+        symbol_alert_counter.clear()
+        today_date = datetime.now().date()
+
+    print("Scanning...")
+
     batch = SYMBOLS[:700]
 
     data = yf.download(
@@ -48,8 +53,6 @@ def scan_market():
         progress=False,
         threads=True
     )
-
-    alerts = []
 
     for symbol in batch:
         try:
@@ -72,43 +75,15 @@ def scan_market():
                 vol_2m = int(df["Volume"].iloc[-2:].sum())
                 vol_5m = int(df["Volume"].iloc[-5:].sum())
 
-                alerts.append((
-                    symbol,
-                    current,
-                    change,
-                    vol_1m,
-                    vol_2m,
-                    vol_5m
-                ))
+                # عداد مستقل لكل سهم
+                if symbol not in symbol_alert_counter:
+                    symbol_alert_counter[symbol] = 1
+                else:
+                    symbol_alert_counter[symbol] += 1
 
-        except:
-            continue
+                direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
 
-    return alerts
-
-
-while True:
-
-    # تصفير العدادات يومياً
-    if datetime.now().date() != today_date:
-        symbol_alert_counter.clear()
-        today_date = datetime.now().date()
-
-    print("Scanning...")
-
-    alerts = scan_market()
-
-    for symbol, price, change, v1, v2, v5 in alerts:
-
-        # عداد مستقل لكل سهم
-        if symbol not in symbol_alert_counter:
-            symbol_alert_counter[symbol] = 1
-        else:
-            symbol_alert_counter[symbol] += 1
-
-        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
-
-        message = f"""
+                message = f"""
 🔶 <b>{symbol}</b>
 
 🚨 تنبيه رقم {symbol_alert_counter[symbol]} لهذا السهم
@@ -117,15 +92,18 @@ while True:
 
 📍 الاتجاه ← {direction}
 
-💰 السعر ← ${round(price,2)} ({round(change,2)}%)
+💰 السعر ← ${round(current,2)} ({round(change,2)}%)
 
 📊 الفوليوم
-1m: {v1:,}
-2m: {v2:,}
-5m: {v5:,}
+1m: {vol_1m:,}
+2m: {vol_2m:,}
+5m: {vol_5m:,}
 """
 
-        send_telegram(message)
-        time.sleep(1)
+                send_telegram(message)
+                time.sleep(1)
+
+        except:
+            continue
 
     time.sleep(INTERVAL)
