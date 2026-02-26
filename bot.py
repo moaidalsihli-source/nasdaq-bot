@@ -1,146 +1,100 @@
 import os
-import time
 import requests
 import yfinance as yf
 import pandas as pd
+import time
 from datetime import datetime
-import pytz
-
-# =============================
-# إعدادات تيليجرام
-# =============================
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 if not TOKEN or not CHAT_ID:
-    print("❌ ضع TOKEN و CHAT_ID في Railway")
+    print("Missing TOKEN or CHAT_ID")
     exit()
 
-# =============================
-# إعدادات البوت
-# =============================
-
-CHECK_INTERVAL = 60
-PERCENT_TRIGGER = 2.5
-MAX_PRICE = 10
+INTERVAL = 60
+MAX_ALERTS = 5
 MIN_VOLUME = 200000
-TOP_PER_CYCLE = 5
+MIN_CHANGE = 2
+MAX_PRICE = 20
 
-alert_counter = 0
-sent_today = set()
+# قائمة ضخمة (تقدر تضيف أكثر)
+SYMBOLS = pd.read_csv(
+    "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
+)["Symbol"].dropna().tolist()
 
-# =============================
-# إيقاف السبت والأحد
-# =============================
+sent_symbols = set()
 
-def weekend_stop():
-    ny = pytz.timezone("America/New_York")
-    now = datetime.now(ny)
-    return now.weekday() >= 5
-
-# =============================
-# جلب الأسهم الأكثر تداولاً فقط
-# =============================
-
-def get_active_stocks():
-    tickers = yf.Tickers("^IXIC")
-    return ["AAPL","TSLA","NVDA","AMD","SOFI","LCID","PLTR","NIO","RIVN","INTC","META","AMZN"]
-
-# =============================
-# إرسال رسالة
-# =============================
-
-def send_alert(message):
+def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
-        "text": message
+        "text": text,
+        "parse_mode": "HTML"
     }
     requests.post(url, data=payload)
 
-# =============================
-# فحص السوق
-# =============================
-
 def scan_market():
-    global alert_counter
+    movers = []
 
-    symbols = get_active_stocks()
-    candidates = []
+    batch = SYMBOLS[:800]  # نفحص أول 800 كل دورة (أمان ضد الحظر)
 
-    for symbol in symbols:
+    data = yf.download(
+        tickers=batch,
+        period="1d",
+        interval="1m",
+        group_by="ticker",
+        progress=False,
+        threads=True
+    )
+
+    for symbol in batch:
         try:
-            stock = yf.Ticker(symbol)
-            data = stock.history(period="1d", interval="1m")
-
-            if data.empty:
+            df = data[symbol]
+            if len(df) < 5:
                 continue
 
-            price = data["Close"].iloc[-1]
-            open_price = data["Open"].iloc[0]
-            percent = ((price - open_price) / open_price) * 100
+            current = df["Close"].iloc[-1]
+            open_price = df["Open"].iloc[0]
+            volume = df["Volume"].sum()
 
-            if price > MAX_PRICE:
-                continue
+            change = ((current - open_price) / open_price) * 100
 
-            if percent < PERCENT_TRIGGER:
-                continue
-
-            total_volume = data["Volume"].sum()
-            if total_volume < MIN_VOLUME:
-                continue
-
-            if symbol in sent_today:
-                continue
-
-            vol_1m = data["Volume"].iloc[-1]
-            vol_2m = data["Volume"].tail(2).sum()
-            vol_5m = data["Volume"].tail(5).sum()
-
-            candidates.append((symbol, percent, price, vol_1m, vol_2m, vol_5m))
+            if (
+                abs(change) >= MIN_CHANGE
+                and volume >= MIN_VOLUME
+                and current <= MAX_PRICE
+                and symbol not in sent_symbols
+            ):
+                movers.append((symbol, current, change, volume))
 
         except:
             continue
 
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    top = candidates[:TOP_PER_CYCLE]
-
-    if not top:
-        return
-
-    message = "🚨 NASDAQ FAST RADAR 🚨\n\n"
-
-    for sym, pct, price, v1, v2, v5 in top:
-        alert_counter += 1
-        sent_today.add(sym)
-
-        message += f"""{sym} ◀ الرمز
-🚨 تنبيه {alert_counter}
-
-🟢 صعود قوي
-💰 ${price:.2f} (+{pct:.1f}%)
-
-📊 1m: {v1:,} | 2m: {v2:,} | 5m: {v5:,}
-
-------------------
-
-"""
-
-    send_alert(message)
-
-# =============================
-# تشغيل مستمر
-# =============================
-
-print("🚀 NASDAQ FAST Radar Started")
+    movers = sorted(movers, key=lambda x: abs(x[2]), reverse=True)
+    return movers[:MAX_ALERTS]
 
 while True:
+    print("Scanning market...")
 
-    if weekend_stop():
-        print("⏸ ويكند - متوقف")
-        time.sleep(600)
-        continue
+    movers = scan_market()
 
-    scan_market()
-    time.sleep(CHECK_INTERVAL)
+    for symbol, price, change, volume in movers:
+        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+
+        message = f"""
+🔶 <b>{symbol}</b>
+
+⚪️ الإشارة ← زخم قوي
+📍 الاتجاه ← {direction}
+
+💰 السعر ← ${round(price,2)} ({round(change,2)}%)
+
+📊 حجم اليوم ← {int(volume):,}
+"""
+
+        send_telegram(message)
+        sent_symbols.add(symbol)
+        time.sleep(2)
+
+    time.sleep(INTERVAL)
