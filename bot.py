@@ -5,15 +5,14 @@ import pandas as pd
 import numpy as np
 import time
 import random
-from datetime import datetime
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-MAX_PRICE = 20
-SEND_DELAY = 5  # كل 5 ثواني
+SEND_DELAY = 5
+MAX_PRICE = 10
 
-sent_symbols = set()  # منع التكرار بنفس الدورة
+tracked_symbols = {}
 
 # =============================
 # المؤشرات
@@ -42,16 +41,18 @@ def send_telegram(msg):
     })
 
 # =============================
-# قائمة الأسهم
+# تحميل قائمة ناسداك
 # =============================
 
 SYMBOLS = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
 )["Symbol"].dropna().tolist()
 
+print("Momentum Sniper Bot Running 🔥")
+
 while True:
 
-    batch = random.sample(SYMBOLS, 150)
+    batch = random.sample(SYMBOLS, 120)
 
     data = yf.download(
         tickers=batch,
@@ -62,7 +63,9 @@ while True:
         threads=True
     )
 
-    qualified = []
+    # =============================
+    # فحص الاختراق الأساسي
+    # =============================
 
     for symbol in batch:
         try:
@@ -71,7 +74,9 @@ while True:
                 continue
 
             price = df['Close'].iloc[-1]
-            if price > MAX_PRICE:
+
+            # فلتر تحت 10$
+            if price >= MAX_PRICE:
                 continue
 
             df['VWAP'] = calculate_vwap(df)
@@ -89,45 +94,86 @@ while True:
             rvol = today_vol / avg_vol_10d if avg_vol_10d > 0 else 0
 
             if (
+                symbol not in tracked_symbols and
                 price > df['VWAP'].iloc[-1] and
                 60 < df['RSI'].iloc[-1] < 75 and
                 volume_spike and
                 rvol > 2 and
                 df['Close'].iloc[-1] > opening_high
             ):
-                qualified.append((symbol, price, df['VWAP'].iloc[-1]))
+
+                tracked_symbols[symbol] = {
+                    "entry_price": price,
+                    "last_alert_price": price
+                }
+
+                vwap = df['VWAP'].iloc[-1]
+                stop_loss = round(vwap * 0.995, 2)
+                target1 = round(price * 1.015, 2)
+                target2 = round(price * 1.02, 2)
+
+                message = f"""
+━━━━━━━━━━━━━━━━━━
+⚡ تنبيه اختراق زخم قوي
+
+الرمز: {symbol}
+السعر: {round(price,2)}$
+
+VWAP: {round(vwap,2)}
+RSI: {round(df['RSI'].iloc[-1],1)}
+RVOL: {round(rvol,2)}x
+
+وقف: {stop_loss}$
+هدف1: {target1}$
+هدف2: {target2}$
+
+سهم أقل من 10$ ✔
+━━━━━━━━━━━━━━━━━━
+"""
+                send_telegram(message)
+                time.sleep(SEND_DELAY)
 
         except:
             continue
 
-    random.shuffle(qualified)
+    # =============================
+    # تنبيهات الامتداد كل +3%
+    # =============================
 
-    for symbol, price, vwap in qualified:
+    for symbol in list(tracked_symbols.keys()):
+        try:
+            df_ext = yf.download(symbol, period="1d", interval="1m", progress=False)
+            current_price = df_ext['Close'].iloc[-1]
 
-        if symbol in sent_symbols:
-            continue
+            entry_price = tracked_symbols[symbol]["entry_price"]
+            last_alert_price = tracked_symbols[symbol]["last_alert_price"]
 
-        stop_loss = round(vwap * 0.995, 2)
-        take_profit = round(price * 1.02, 2)
+            percent_move = ((current_price - last_alert_price) / last_alert_price) * 100
 
-        message = f"""
-🎯 <b>{symbol}</b>
+            if percent_move >= 3:
 
-🚀 اختراق زخم مؤكد
-📈 فوق VWAP
-🔥 RVOL > 2
-⚡ Volume Spike
-📊 RSI 60-75
-💥 اختراق أول 15 دقيقة
+                total_move = ((current_price - entry_price) / entry_price) * 100
 
-💰 السعر: {round(price,2)}
-🛑 وقف: {stop_loss}
-🎯 هدف: {take_profit}
+                message = f"""
+━━━━━━━━━━━━━━━━━━
+🚀 تنبيه امتداد زخم
+
+الرمز: {symbol}
+السعر الحالي: {round(current_price,2)}$
+
++{round(percent_move,2)}% من آخر تنبيه
+إجمالي الحركة: +{round(total_move,2)}%
+
+الزخم مستمر 🔥
+━━━━━━━━━━━━━━━━━━
 """
+                send_telegram(message)
 
-        send_telegram(message)
-        sent_symbols.add(symbol)
+                tracked_symbols[symbol]["last_alert_price"] = current_price
 
-        time.sleep(SEND_DELAY)
+                time.sleep(SEND_DELAY)
+
+        except:
+            continue
 
     time.sleep(3)
