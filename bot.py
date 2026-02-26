@@ -2,66 +2,61 @@ import os
 import requests
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import time
 import random
 from datetime import datetime
 
-# =============================
-# إعدادات تيليجرام
-# =============================
-
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-if not TOKEN or not CHAT_ID:
-    print("Missing TOKEN or CHAT_ID")
-    exit()
-
-# =============================
-# إعدادات الفلترة
-# =============================
-
-INTERVAL = 60          # دقيقة
-MIN_CHANGE = 3         # 3%
-MIN_VOLUME = 150000
 MAX_PRICE = 20
-MAX_ALERTS = 5         # عدد الأسهم المرسلة كل دورة
+SEND_DELAY = 5  # كل 5 ثواني
 
-symbol_alert_counter = {}
-today_date = datetime.now().date()
+sent_symbols = set()  # منع التكرار بنفس الدورة
 
-# تحميل قائمة ناسداك
+# =============================
+# المؤشرات
+# =============================
+
+def calculate_vwap(df):
+    q = df['Volume']
+    p = (df['High'] + df['Low'] + df['Close']) / 3
+    return (p * q).cumsum() / q.cumsum()
+
+def calculate_rsi(df, period=14):
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "parse_mode": "HTML"
+    })
+
+# =============================
+# قائمة الأسهم
+# =============================
+
 SYMBOLS = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
 )["Symbol"].dropna().tolist()
 
-print(f"Loaded {len(SYMBOLS)} symbols")
-
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    requests.post(url, data=payload)
-
 while True:
 
-    # تصفير العدادات يومياً
-    if datetime.now().date() != today_date:
-        symbol_alert_counter.clear()
-        today_date = datetime.now().date()
-        print("Daily reset done")
-
-    print("Scanning market...")
-
-    batch = random.sample(SYMBOLS, 700)
+    batch = random.sample(SYMBOLS, 150)
 
     data = yf.download(
         tickers=batch,
-        period="1d",
-        interval="1m",
+        period="2d",
+        interval="5m",
         group_by="ticker",
         progress=False,
         threads=True
@@ -71,60 +66,68 @@ while True:
 
     for symbol in batch:
         try:
-            df = data[symbol]
-            if len(df) < 6:
+            df = data[symbol].dropna()
+            if len(df) < 30:
                 continue
 
-            current = df["Close"].iloc[-1]
-            open_price = df["Open"].iloc[0]
-            change = ((current - open_price) / open_price) * 100
-            total_volume = df["Volume"].sum()
+            price = df['Close'].iloc[-1]
+            if price > MAX_PRICE:
+                continue
+
+            df['VWAP'] = calculate_vwap(df)
+            df['RSI'] = calculate_rsi(df)
+
+            opening_high = df['High'].iloc[0:3].max()
+
+            last_vol = df['Volume'].iloc[-1]
+            avg_last5 = df['Volume'].iloc[-6:-1].mean()
+            volume_spike = last_vol > avg_last5 * 3
+
+            daily = yf.download(symbol, period="10d", interval="1d", progress=False)
+            avg_vol_10d = daily['Volume'].mean()
+            today_vol = df['Volume'].sum()
+            rvol = today_vol / avg_vol_10d if avg_vol_10d > 0 else 0
 
             if (
-                abs(change) >= MIN_CHANGE and
-                total_volume >= MIN_VOLUME and
-                current <= MAX_PRICE
+                price > df['VWAP'].iloc[-1] and
+                60 < df['RSI'].iloc[-1] < 75 and
+                volume_spike and
+                rvol > 2 and
+                df['Close'].iloc[-1] > opening_high
             ):
-                qualified.append((symbol, current, change, df))
+                qualified.append((symbol, price, df['VWAP'].iloc[-1]))
 
         except:
             continue
 
-    # لو أكثر من 5 → اختار 5 عشوائي
-    if len(qualified) > MAX_ALERTS:
-        qualified = random.sample(qualified, MAX_ALERTS)
+    random.shuffle(qualified)
 
-    for symbol, price, change, df in qualified:
+    for symbol, price, vwap in qualified:
 
-        vol_1m = int(df["Volume"].iloc[-1])
-        vol_2m = int(df["Volume"].iloc[-2:].sum())
-        vol_5m = int(df["Volume"].iloc[-5:].sum())
+        if symbol in sent_symbols:
+            continue
 
-        if symbol not in symbol_alert_counter:
-            symbol_alert_counter[symbol] = 1
-        else:
-            symbol_alert_counter[symbol] += 1
-
-        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+        stop_loss = round(vwap * 0.995, 2)
+        take_profit = round(price * 1.02, 2)
 
         message = f"""
-🔶 <b>{symbol}</b>
+🎯 <b>{symbol}</b>
 
-🚨 تنبيه رقم {symbol_alert_counter[symbol]} لهذا السهم
+🚀 اختراق زخم مؤكد
+📈 فوق VWAP
+🔥 RVOL > 2
+⚡ Volume Spike
+📊 RSI 60-75
+💥 اختراق أول 15 دقيقة
 
-⚡ زخم قوي
-
-📍 الاتجاه ← {direction}
-
-💰 السعر ← ${round(price,2)} ({round(change,2)}%)
-
-📊 الفوليوم
-1m: {vol_1m:,}
-2m: {vol_2m:,}
-5m: {vol_5m:,}
+💰 السعر: {round(price,2)}
+🛑 وقف: {stop_loss}
+🎯 هدف: {take_profit}
 """
 
         send_telegram(message)
-        time.sleep(1)
+        sent_symbols.add(symbol)
 
-    time.sleep(INTERVAL)
+        time.sleep(SEND_DELAY)
+
+    time.sleep(3)
