@@ -14,9 +14,9 @@ if not TOKEN or not CHAT_ID:
 
 INTERVAL = 30
 MAX_ALERTS = 4
-MIN_CHANGE = 2
+MIN_CHANGE = 3       # 3% وفوق
 MIN_VOLUME = 150000
-MAX_PRICE = 20   # ✅ فقط الأسهم تحت 20$
+MAX_PRICE = 20       # تحت 20$
 
 alert_counter = 1
 today_date = datetime.now().date()
@@ -56,7 +56,6 @@ def scan_market():
 
             current = df["Close"].iloc[-1]
             open_price = df["Open"].iloc[0]
-            high_day = df["High"].max()
 
             change = ((current - open_price) / open_price) * 100
             total_volume = df["Volume"].sum()
@@ -64,23 +63,21 @@ def scan_market():
             if (
                 abs(change) >= MIN_CHANGE and
                 total_volume >= MIN_VOLUME and
-                current <= MAX_PRICE   # ✅ فلترة تحت 20$
+                current <= MAX_PRICE
             ):
 
-                if current >= high_day:  # 🔥 هاي اليوم فقط
+                vol_1m = int(df["Volume"].iloc[-1])
+                vol_2m = int(df["Volume"].iloc[-2:].sum())
+                vol_5m = int(df["Volume"].iloc[-5:].sum())
 
-                    vol_1m = int(df["Volume"].iloc[-1])
-                    vol_2m = int(df["Volume"].iloc[-2:].sum())
-                    vol_5m = int(df["Volume"].iloc[-5:].sum())
-
-                    movers.append((
-                        symbol,
-                        current,
-                        change,
-                        vol_1m,
-                        vol_2m,
-                        vol_5m
-                    ))
+                movers.append((
+                    symbol,
+                    current,
+                    change,
+                    vol_1m,
+                    vol_2m,
+                    vol_5m
+                ))
 
         except:
             continue
@@ -100,12 +97,16 @@ while True:
 
     for symbol, price, change, v1, v2, v5 in movers:
 
+        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+
         message = f"""
 🔶 <b>{symbol}</b>
 
 🚨 تنبيه رقم {alert_counter} اليوم
 
-🔥 هاي جديد لليوم
+⚡ زخم قوي
+
+📍 الاتجاه ← {direction}
 
 💰 السعر ← ${round(price,2)} ({round(change,2)}%)
 
