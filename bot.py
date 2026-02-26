@@ -21,30 +21,21 @@ if not TOKEN or not CHAT_ID:
 # إعدادات الفلترة
 # =============================
 
-INTERVAL = 30
-MIN_CHANGE = 3          # نسبة التغير %
-MIN_VOLUME = 150000     # أقل فوليوم
-MAX_PRICE = 20          # أقصى سعر
+INTERVAL = 60          # دقيقة
+MIN_CHANGE = 3         # 3%
+MIN_VOLUME = 150000
+MAX_PRICE = 20
+MAX_ALERTS = 5         # عدد الأسهم المرسلة كل دورة
 
-# عداد مستقل لكل سهم
 symbol_alert_counter = {}
-
-# لمتابعة اليوم
 today_date = datetime.now().date()
 
-# =============================
-# تحميل قائمة ناسداك كاملة
-# =============================
-
+# تحميل قائمة ناسداك
 SYMBOLS = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
 )["Symbol"].dropna().tolist()
 
 print(f"Loaded {len(SYMBOLS)} symbols")
-
-# =============================
-# إرسال تيليجرام
-# =============================
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -54,10 +45,6 @@ def send_telegram(text):
         "parse_mode": "HTML"
     }
     requests.post(url, data=payload)
-
-# =============================
-# تشغيل الرادار
-# =============================
 
 while True:
 
@@ -69,7 +56,6 @@ while True:
 
     print("Scanning market...")
 
-    # اختيار عشوائي عشان ما يتركز على A
     batch = random.sample(SYMBOLS, 700)
 
     data = yf.download(
@@ -81,10 +67,11 @@ while True:
         threads=True
     )
 
+    qualified = []
+
     for symbol in batch:
         try:
             df = data[symbol]
-
             if len(df) < 6:
                 continue
 
@@ -98,20 +85,29 @@ while True:
                 total_volume >= MIN_VOLUME and
                 current <= MAX_PRICE
             ):
+                qualified.append((symbol, current, change, df))
 
-                vol_1m = int(df["Volume"].iloc[-1])
-                vol_2m = int(df["Volume"].iloc[-2:].sum())
-                vol_5m = int(df["Volume"].iloc[-5:].sum())
+        except:
+            continue
 
-                # عداد خاص لكل سهم
-                if symbol not in symbol_alert_counter:
-                    symbol_alert_counter[symbol] = 1
-                else:
-                    symbol_alert_counter[symbol] += 1
+    # لو أكثر من 5 → اختار 5 عشوائي
+    if len(qualified) > MAX_ALERTS:
+        qualified = random.sample(qualified, MAX_ALERTS)
 
-                direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+    for symbol, price, change, df in qualified:
 
-                message = f"""
+        vol_1m = int(df["Volume"].iloc[-1])
+        vol_2m = int(df["Volume"].iloc[-2:].sum())
+        vol_5m = int(df["Volume"].iloc[-5:].sum())
+
+        if symbol not in symbol_alert_counter:
+            symbol_alert_counter[symbol] = 1
+        else:
+            symbol_alert_counter[symbol] += 1
+
+        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+
+        message = f"""
 🔶 <b>{symbol}</b>
 
 🚨 تنبيه رقم {symbol_alert_counter[symbol]} لهذا السهم
@@ -120,7 +116,7 @@ while True:
 
 📍 الاتجاه ← {direction}
 
-💰 السعر ← ${round(current,2)} ({round(change,2)}%)
+💰 السعر ← ${round(price,2)} ({round(change,2)}%)
 
 📊 الفوليوم
 1m: {vol_1m:,}
@@ -128,10 +124,7 @@ while True:
 5m: {vol_5m:,}
 """
 
-                send_telegram(message)
-                time.sleep(1)
-
-        except:
-            continue
+        send_telegram(message)
+        time.sleep(1)
 
     time.sleep(INTERVAL)
