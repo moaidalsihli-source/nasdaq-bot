@@ -12,18 +12,18 @@ if not TOKEN or not CHAT_ID:
     print("Missing TOKEN or CHAT_ID")
     exit()
 
-INTERVAL = 60
-MAX_ALERTS = 5
-MIN_VOLUME = 200000
+INTERVAL = 30
+MAX_ALERTS = 4
 MIN_CHANGE = 2
-MAX_PRICE = 20
+MIN_VOLUME = 150000
 
-# قائمة ضخمة (تقدر تضيف أكثر)
+alert_counter = 1
+today_date = datetime.now().date()
+
+# تحميل قائمة ناسداك
 SYMBOLS = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
 )["Symbol"].dropna().tolist()
-
-sent_symbols = set()
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -36,8 +36,7 @@ def send_telegram(text):
 
 def scan_market():
     movers = []
-
-    batch = SYMBOLS[:800]  # نفحص أول 800 كل دورة (أمان ضد الحظر)
+    batch = SYMBOLS[:700]
 
     data = yf.download(
         tickers=batch,
@@ -51,22 +50,36 @@ def scan_market():
     for symbol in batch:
         try:
             df = data[symbol]
-            if len(df) < 5:
+            if len(df) < 6:
                 continue
 
             current = df["Close"].iloc[-1]
             open_price = df["Open"].iloc[0]
-            volume = df["Volume"].sum()
+            high_day = df["High"].max()
 
             change = ((current - open_price) / open_price) * 100
+            total_volume = df["Volume"].sum()
 
             if (
-                abs(change) >= MIN_CHANGE
-                and volume >= MIN_VOLUME
-                and current <= MAX_PRICE
-                and symbol not in sent_symbols
+                abs(change) >= MIN_CHANGE and
+                total_volume >= MIN_VOLUME
             ):
-                movers.append((symbol, current, change, volume))
+
+                # يرصد هاي اليوم فقط
+                if current >= high_day:
+
+                    vol_1m = int(df["Volume"].iloc[-1])
+                    vol_2m = int(df["Volume"].iloc[-2:].sum())
+                    vol_5m = int(df["Volume"].iloc[-5:].sum())
+
+                    movers.append((
+                        symbol,
+                        current,
+                        change,
+                        vol_1m,
+                        vol_2m,
+                        vol_5m
+                    ))
 
         except:
             continue
@@ -75,26 +88,35 @@ def scan_market():
     return movers[:MAX_ALERTS]
 
 while True:
-    print("Scanning market...")
+
+    # تصفير عداد يوم جديد
+    if datetime.now().date() != today_date:
+        alert_counter = 1
+        today_date = datetime.now().date()
+
+    print("Scanning...")
 
     movers = scan_market()
 
-    for symbol, price, change, volume in movers:
-        direction = "🟢 صاعد" if change > 0 else "🔴 هابط"
+    for symbol, price, change, v1, v2, v5 in movers:
 
         message = f"""
 🔶 <b>{symbol}</b>
 
-⚪️ الإشارة ← زخم قوي
-📍 الاتجاه ← {direction}
+🚨 تنبيه رقم {alert_counter} اليوم
+
+🔥 هاي جديد لليوم
 
 💰 السعر ← ${round(price,2)} ({round(change,2)}%)
 
-📊 حجم اليوم ← {int(volume):,}
+📊 الفوليوم
+1m: {v1:,}
+2m: {v2:,}
+5m: {v5:,}
 """
 
         send_telegram(message)
-        sent_symbols.add(symbol)
+        alert_counter += 1
         time.sleep(2)
 
     time.sleep(INTERVAL)
