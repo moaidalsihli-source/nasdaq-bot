@@ -3,7 +3,12 @@ import requests
 import yfinance as yf
 import pandas as pd
 import time
+import random
 from datetime import datetime
+
+# =============================
+# إعدادات تيليجرام
+# =============================
 
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -12,18 +17,34 @@ if not TOKEN or not CHAT_ID:
     print("Missing TOKEN or CHAT_ID")
     exit()
 
-INTERVAL = 30
-MIN_CHANGE = 3
-MIN_VOLUME = 150000
-MAX_PRICE = 20
+# =============================
+# إعدادات الفلترة
+# =============================
 
+INTERVAL = 30
+MIN_CHANGE = 3          # نسبة التغير %
+MIN_VOLUME = 150000     # أقل فوليوم
+MAX_PRICE = 20          # أقصى سعر
+
+# عداد مستقل لكل سهم
 symbol_alert_counter = {}
+
+# لمتابعة اليوم
 today_date = datetime.now().date()
 
-# تحميل قائمة ناسداك
+# =============================
+# تحميل قائمة ناسداك كاملة
+# =============================
+
 SYMBOLS = pd.read_csv(
     "https://raw.githubusercontent.com/datasets/nasdaq-listings/master/data/nasdaq-listed-symbols.csv"
 )["Symbol"].dropna().tolist()
+
+print(f"Loaded {len(SYMBOLS)} symbols")
+
+# =============================
+# إرسال تيليجرام
+# =============================
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -34,16 +55,22 @@ def send_telegram(text):
     }
     requests.post(url, data=payload)
 
+# =============================
+# تشغيل الرادار
+# =============================
+
 while True:
 
     # تصفير العدادات يومياً
     if datetime.now().date() != today_date:
         symbol_alert_counter.clear()
         today_date = datetime.now().date()
+        print("Daily reset done")
 
-    print("Scanning...")
+    print("Scanning market...")
 
-    batch = SYMBOLS[:700]
+    # اختيار عشوائي عشان ما يتركز على A
+    batch = random.sample(SYMBOLS, 700)
 
     data = yf.download(
         tickers=batch,
@@ -57,6 +84,7 @@ while True:
     for symbol in batch:
         try:
             df = data[symbol]
+
             if len(df) < 6:
                 continue
 
@@ -75,7 +103,7 @@ while True:
                 vol_2m = int(df["Volume"].iloc[-2:].sum())
                 vol_5m = int(df["Volume"].iloc[-5:].sum())
 
-                # عداد مستقل لكل سهم
+                # عداد خاص لكل سهم
                 if symbol not in symbol_alert_counter:
                     symbol_alert_counter[symbol] = 1
                 else:
