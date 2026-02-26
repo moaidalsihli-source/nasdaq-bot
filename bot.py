@@ -16,6 +16,7 @@ INTERVAL = 30
 MAX_ALERTS = 4
 MIN_CHANGE = 2
 MIN_VOLUME = 150000
+MAX_PRICE = 20   # ✅ فقط الأسهم تحت 20$
 
 alert_counter = 1
 today_date = datetime.now().date()
@@ -62,11 +63,11 @@ def scan_market():
 
             if (
                 abs(change) >= MIN_CHANGE and
-                total_volume >= MIN_VOLUME
+                total_volume >= MIN_VOLUME and
+                current <= MAX_PRICE   # ✅ فلترة تحت 20$
             ):
 
-                # يرصد هاي اليوم فقط
-                if current >= high_day:
+                if current >= high_day:  # 🔥 هاي اليوم فقط
 
                     vol_1m = int(df["Volume"].iloc[-1])
                     vol_2m = int(df["Volume"].iloc[-2:].sum())
@@ -89,7 +90,6 @@ def scan_market():
 
 while True:
 
-    # تصفير عداد يوم جديد
     if datetime.now().date() != today_date:
         alert_counter = 1
         today_date = datetime.now().date()
