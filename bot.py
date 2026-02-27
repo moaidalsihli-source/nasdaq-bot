@@ -2,9 +2,9 @@ import os
 import requests
 import yfinance as yf
 import time
-import random
 from datetime import datetime
 import pytz
+import random
 
 # ==============================
 # Telegram
@@ -32,17 +32,19 @@ def market_is_open():
 # ==============================
 # Settings
 # ==============================
-# ضع هنا قائمة 900 شركة (كمثال وضعت بعض الشركات)
 symbols = [
-    "AAPL","MSFT","AMZN","TSLA","NVDA","GOOGL","META","BRK-B","JNJ","V",
-    # … تابع القائمة حتى تصل 900 شركة
+    "NVDA","TSLA","AAPL","AMD","META","AMZN","NFLX","SMCI","PLTR","COIN"
+    # تقدر تزيد حتى 900 شركة
 ]
 
 MIN_VOLUME = 100
 ALERT_STEP = 10  # كل 10% حركة
-BATCH_SIZE = 50  # عدد الشركات لكل دورة (يمكن تعديله حسب سرعة السيرفر)
+TARGET_PERCENT = 50  # الهدف +50% من السعر عند أول تنبيه
+BATCH_SIZE = 50
 
-alerted_levels = {}  # آخر سعر تنبيه لكل عقد
+alerted_levels = {}  # السعر قبل كل تنبيه
+strike_prices = {}   # Strike لكل عقد
+targets = {}         # هدف العقد لكل عقد
 
 # ==============================
 # Scanner
@@ -54,7 +56,6 @@ while True:
             time.sleep(60)
             continue
 
-        # اختيار دفعة من الشركات لكل دورة
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
 
         for symbol in batch_symbols:
@@ -74,39 +75,44 @@ while True:
 
                         if last_price is None or volume is None:
                             continue
-
                         if volume < MIN_VOLUME:
                             continue
 
                         contract_id = f"{symbol}-{opt_type}-{strike}-{nearest_exp}"
 
+                        # أول مرة يشوف العقد
                         if contract_id not in alerted_levels:
                             alerted_levels[contract_id] = last_price
+                            strike_prices[contract_id] = strike
+                            targets[contract_id] = last_price * (1 + TARGET_PERCENT/100)
                             continue
 
                         base_price = alerted_levels[contract_id]
                         percent_change = ((last_price - base_price) / base_price) * 100
 
                         if percent_change >= ALERT_STEP:
+                            target_price = targets[contract_id]
                             message = f"""
-🚀 10% MOVE ALERT
+🚀 {ALERT_STEP}% MOVE ALERT
 
 🔸 الرمز -> {symbol}
 🟢 {opt_type}
 
 📅 Exp -> {nearest_exp}
-📌 Strike -> {strike}
+📌 Strike -> {strike_prices[contract_id]}
 
-💰 Previous -> {base_price:.2f}$
-📍 Now -> {last_price:.2f}$
+💰 Before Move -> {base_price:.2f}$
+📍 After Move -> {last_price:.2f}$
 📈 Change -> +{percent_change:.2f}%
+🎯 Target -> {target_price:.2f}$
 
 📊 Volume -> {int(volume):,}
 """
                             send_telegram(message)
+                            # تحديث السعر قبل التنبيه القادم
                             alerted_levels[contract_id] = last_price
 
-        time.sleep(60)  # يفحص كل دقيقة دفعة جديدة
+        time.sleep(60)
 
     except Exception as e:
         print("Error:", e)
