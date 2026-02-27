@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import pytz
 import random
+import math
 
 # ==============================
 # Telegram
@@ -23,7 +24,7 @@ def send_telegram(message):
 def market_is_open():
     ny = pytz.timezone("America/New_York")
     now = datetime.now(ny)
-    if now.weekday() >= 5:
+    if now.weekday() >= 5:  # السبت والأحد
         return False
     open_time = now.replace(hour=9, minute=30, second=0)
     close_time = now.replace(hour=16, minute=0, second=0)
@@ -34,17 +35,17 @@ def market_is_open():
 # ==============================
 symbols = [
     "NVDA","TSLA","AAPL","AMD","META","AMZN","NFLX","SMCI","PLTR","COIN"
-    # تقدر تزيد حتى 900 شركة
+    # أضف باقي الشركات حتى تصل 900+
 ]
 
 MIN_VOLUME = 100
-ALERT_STEP = 10  # كل 10% حركة
-TARGET_PERCENT = 50  # الهدف +50% من السعر عند أول تنبيه
-BATCH_SIZE = 50
+ALERT_STEP = 10    # تنبيه كل +10% حركة
+TARGET_PERCENT = 50  # هدف العقد +50% من السعر عند أول تنبيه
+BATCH_SIZE = 50    # عدد الشركات لكل دورة
 
-alerted_levels = {}  # السعر قبل كل تنبيه
-strike_prices = {}   # Strike لكل عقد
-targets = {}         # هدف العقد لكل عقد
+alerted_levels = {}   # يخزن السعر قبل كل تنبيه لكل عقد
+strike_prices = {}    # يخزن Strike لكل عقد
+targets = {}          # يخزن Target Price لكل عقد
 
 # ==============================
 # Scanner
@@ -56,6 +57,7 @@ while True:
             time.sleep(60)
             continue
 
+        # اختيار دفعة من الشركات لكل دورة
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
 
         for symbol in batch_symbols:
@@ -65,17 +67,22 @@ while True:
                 continue
 
             for nearest_exp in expirations:
-                chain = stock.option_chain(nearest_exp)
+                try:
+                    chain = stock.option_chain(nearest_exp)
+                except Exception as e:
+                    print(f"Failed to fetch option chain for {symbol} {nearest_exp}: {e}")
+                    continue
 
                 for opt_type, df in [("CALL", chain.calls), ("PUT", chain.puts)]:
                     for _, row in df.iterrows():
-                        strike = row["strike"]
-                        last_price = row["lastPrice"]
-                        volume = row["volume"]
+                        strike = row.get("strike")
+                        last_price = row.get("lastPrice")
+                        volume = row.get("volume")
 
-                        if last_price is None or volume is None:
+                        # تجاهل البيانات غير صالحة
+                        if last_price is None or strike is None or volume is None:
                             continue
-                        if volume < MIN_VOLUME:
+                        if last_price <= 0 or volume < MIN_VOLUME:
                             continue
 
                         contract_id = f"{symbol}-{opt_type}-{strike}-{nearest_exp}"
@@ -88,6 +95,11 @@ while True:
                             continue
 
                         base_price = alerted_levels[contract_id]
+
+                        # حماية من القسمة على صفر
+                        if base_price <= 0:
+                            continue
+
                         percent_change = ((last_price - base_price) / base_price) * 100
 
                         if percent_change >= ALERT_STEP:
@@ -109,10 +121,9 @@ while True:
 📊 Volume -> {int(volume):,}
 """
                             send_telegram(message)
-                            # تحديث السعر قبل التنبيه القادم
-                            alerted_levels[contract_id] = last_price
+                            alerted_levels[contract_id] = last_price  # تحديث السعر قبل التنبيه القادم
 
-        time.sleep(60)
+        time.sleep(60)  # يفحص كل دقيقة دفعة جديدة
 
     except Exception as e:
         print("Error:", e)
