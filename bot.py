@@ -8,49 +8,42 @@ import pandas as pd
 import random
 
 # ==============================
-# إعداد تيليجرام
+# إعداد تيليجرام للقناة
 # ==============================
 TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+CHANNEL_ID = os.environ.get("CHANNEL_ID")  # مثال: @YourChannelUsername
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
+    data = {"chat_id": CHANNEL_ID, "text": message}
     try:
         requests.post(url, data=data)
     except Exception as e:
         print("خطأ في تيليجرام:", e)
 
 # ==============================
-# التحقق من وقت السوق
+# إرسال رسالة بدء التشغيل
 # ==============================
-def market_is_open():
-    ny = pytz.timezone("America/New_York")
-    now = datetime.now(ny)
-    if now.weekday() >= 5:
-        return False
-    open_time = now.replace(hour=9, minute=30, second=0)
-    close_time = now.replace(hour=16, minute=0, second=0)
-    return open_time <= now <= close_time
+send_telegram("🚀 البوت بدأ التشغيل ✅")
 
 # ==============================
-# إعداد الأسهم
+# إعداد الأسهم (مثال 1000 سهم)
 # ==============================
-# ضع هنا قائمة 1000 سهم أو أكثر
-symbols = [
-    "NIO","PLTR","AMC","SNDL","GME","BB","AAPL","NVDA","TSLA","AMD",
-    # ... أكمل حتى 1000 سهم
-]
+symbols = ["BATL","NIO","PLTR","AMC","GME","BB","NVDA","TSLA","AMD","AAPL"]
+# أكمل حتى 1000 سهم
+alert_count = {sym: 0 for sym in symbols}
+alerted_prices = {}
 
-MIN_VOLUME = 100_000
+# ==============================
+# إعداد الفلتر
+# ==============================
 PRICE_MIN = 0.05
 PRICE_MAX = 10.0
-ALERT_STEP = 5
+MIN_VOLUME = 100_000
+ALERT_STEP = 2.0
 RSI_PERIOD = 14
 EMA_PERIOD = 50
-BATCH_SIZE = 50  # عدد الأسهم لكل دفعة
-
-alerted_prices = {}
+BATCH_SIZE = 50
 
 # ==============================
 # دوال RSI و EMA
@@ -69,41 +62,37 @@ def compute_ema(prices, period=50):
     return prices.ewm(span=period, adjust=False).mean()
 
 # ==============================
-# حلقة المراقبة
+# تشغيل المراقبة
 # ==============================
 while True:
     try:
-        if not market_is_open():
-            print("السوق مغلق حالياً")
-            time.sleep(60)
-            continue
-
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
-
-        alerts_this_batch = []
 
         for symbol in batch_symbols:
             try:
                 stock = yf.Ticker(symbol)
                 data = stock.history(period="60d")['Close']
-                volume_data = stock.history(period="1d")['Volume']
+                volume_data = stock.history(period="5d", interval="1m")['Volume']
 
                 if data.empty or volume_data.empty:
                     continue
 
                 last_price = data.iloc[-1]
-                last_volume = volume_data.iloc[-1]
-
                 if last_price < PRICE_MIN or last_price > PRICE_MAX:
-                    continue
-                if last_volume < MIN_VOLUME:
                     continue
 
                 ema50 = compute_ema(data, EMA_PERIOD).iloc[-1]
                 rsi = compute_rsi(data, RSI_PERIOD).iloc[-1]
 
-                bullish = last_price > ema50 and rsi > 55
-                bearish = last_price < ema50 and rsi < 45
+                # تحديد نوع الإشارة
+                if last_price > ema50 and rsi > 55:
+                    signal = "زخم"
+                    direction = "🟢 صاعد"
+                elif last_price > data.max():
+                    signal = "قمة أعلى جديدة"
+                    direction = "🟢 صاعد"
+                else:
+                    continue
 
                 if symbol not in alerted_prices:
                     alerted_prices[symbol] = last_price
@@ -111,35 +100,33 @@ while True:
 
                 base_price = alerted_prices[symbol]
                 percent_change = ((last_price - base_price) / base_price) * 100
-
-                if bullish and percent_change >= ALERT_STEP:
-                    direction = "🟢 صعود قوي"
-                elif bearish and abs(percent_change) >= ALERT_STEP:
-                    direction = "🔴 هبوط قوي"
-                else:
+                if percent_change < ALERT_STEP:
                     continue
 
-                message = f"""
-{direction} في سهم
+                # فوليوم لفترات 1m, 2m, 5m
+                vol_1m = volume_data.iloc[-1]
+                vol_2m = volume_data.iloc[-2] if len(volume_data) > 1 else vol_1m
+                vol_5m = volume_data.iloc[-5] if len(volume_data) > 4 else vol_1m
 
-🔹 السهم: {symbol}
-💰 السعر السابق: {base_price:.2f}$
-📈 السعر الحالي: {last_price:.2f}$
-📊 نسبة التغير: {percent_change:.2f}%
-📊 RSI: {rsi:.2f}
-📈 EMA50: {ema50:.2f}
-📦 حجم التداول: {int(last_volume):,}
-"""
-                alerts_this_batch.append((percent_change, message))
                 alerted_prices[symbol] = last_price
+                alert_count[symbol] += 1
+                alert_number = alert_count[symbol]
+
+                # إرسال التنبيه مباشرة للقناة
+                message = f"""
+RadarMom
+
+🔸 الرمز -> {symbol}
+🚨 تنبيه رقم {alert_number} اليوم
+⚪️ الإشارة -> {signal} | {direction}
+💰 السعر -> {last_price:.2f}$ (+{percent_change:.1f}%)
+📊 الفوليوم -> 1m: {int(vol_1m/1000):,}K | 2m: {int(vol_2m/1000):,}K | 5m: {int(vol_5m/1000):,}K
+"""
+                send_telegram(message)
 
             except Exception as e:
                 print(f"خطأ في السهم {symbol}: {e}")
                 continue
-
-        # إرسال التنبيهات مرتبة حسب أكبر نسبة تغير أولاً
-        for _, msg in sorted(alerts_this_batch, key=lambda x: abs(x[0]), reverse=True):
-            send_telegram(msg)
 
         time.sleep(60)
 
