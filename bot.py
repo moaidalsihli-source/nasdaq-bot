@@ -26,26 +26,27 @@ MARKET_CLOSE = dt_time(16, 0)
 
 def market_status_now():
     now = datetime.now(ny)
-    weekday = now.weekday()
     current_time = now.time()
+    weekday = now.weekday()
 
     if weekday >= 5:
         return "السوق مغلق اليوم 🔴"
-    elif current_time < MARKET_OPEN:
-        return "السوق سيفتح قريبًا ⏰"
     elif MARKET_OPEN <= current_time <= MARKET_CLOSE:
         return "السوق مفتوح الآن 🟢"
+    elif current_time < MARKET_OPEN:
+        return "السوق سيفتح قريبًا ⏰"
     else:
         return "السوق مغلق الآن 🔴"
 
-# إرسال أول رسالة عند التشغيل
+# ==============================
+# إرسال حالة السوق فور بدء البوت
+# ==============================
 send_telegram(f"🚀 البوت بدأ التشغيل ✅ | {market_status_now()}")
 
 # ==============================
-# إعداد الأسهم (1000 سهم)
+# إعداد الأسهم (يمكنك تكمل حتى 1000 سهم)
 # ==============================
 symbols = ["BATL","NIO","PLTR","AMC","GME","BB","NVDA","TSLA","AMD","AAPL"]
-# أكمل حتى 1000 سهم
 alert_count = {sym: 0 for sym in symbols}
 alerted_prices = {}
 
@@ -54,7 +55,6 @@ alerted_prices = {}
 # ==============================
 PRICE_MIN = 0.05
 PRICE_MAX = 10.0
-MIN_VOLUME = 100_000
 ALERT_STEP = 2.0
 RSI_PERIOD = 14
 EMA_PERIOD = 50
@@ -77,27 +77,13 @@ def compute_ema(prices, period=50):
     return prices.ewm(span=period, adjust=False).mean()
 
 # ==============================
-# إرسال تحديث حالة السوق كل ساعة
-# ==============================
-last_market_alert = None  # لتجنب تكرار نفس الرسالة
-
-def check_market_alert():
-    global last_market_alert
-    status = market_status_now()
-    open_now = "مفتوح" in status
-    closed_now = "مغلق" in status or "سيفتح" in status
-
-    if last_market_alert != status:
-        send_telegram(f"⏰ تحديث: {status}")
-        last_market_alert = status
-
-# ==============================
 # تشغيل المراقبة
 # ==============================
 while True:
     try:
-        # تحقق حالة السوق
-        check_market_alert()
+        # تحقق حالة السوق كل دقيقة
+        status = market_status_now()
+        send_telegram(f"⏰ تحديث حالة السوق: {status}")
 
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
 
@@ -145,7 +131,6 @@ while True:
                 alert_count[symbol] += 1
                 alert_number = alert_count[symbol]
 
-                # إرسال التنبيه مباشرة للقناة
                 message = f"""
 RadarMom
 
