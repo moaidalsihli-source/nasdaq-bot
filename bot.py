@@ -22,9 +22,24 @@ def send_telegram(message):
         print("خطأ في تيليجرام:", e)
 
 # ==============================
-# إرسال رسالة بدء التشغيل
+# التحقق من وقت السوق
 # ==============================
-send_telegram("🚀 البوت بدأ التشغيل ✅")
+def market_is_open():
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny)
+    if now.weekday() >= 5:
+        return False
+    open_time = now.replace(hour=9, minute=30, second=0)
+    close_time = now.replace(hour=16, minute=0, second=0)
+    return open_time <= now <= close_time
+
+# ==============================
+# إرسال رسالة بدء التشغيل مع حالة السوق
+# ==============================
+if market_is_open():
+    send_telegram("🚀 البوت بدأ التشغيل ✅ | السوق مفتوح الآن 🟢")
+else:
+    send_telegram("🚀 البوت بدأ التشغيل ✅ | السوق مغلق الآن 🔴")
 
 # ==============================
 # إعداد الأسهم (مثال 1000 سهم)
