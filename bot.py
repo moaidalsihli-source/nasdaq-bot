@@ -4,10 +4,11 @@ import yfinance as yf
 import time
 from datetime import datetime
 import pytz
+import pandas as pd
 import random
 
 # ==============================
-# إعدادات تيليجرام
+# إعداد تيليجرام
 # ==============================
 TOKEN = os.environ.get("TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -15,7 +16,10 @@ CHAT_ID = os.environ.get("CHAT_ID")
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message}
-    requests.post(url, data=data)
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print("خطأ في تيليجرام:", e)
 
 # ==============================
 # التحقق من وقت السوق
@@ -30,24 +34,42 @@ def market_is_open():
     return open_time <= now <= close_time
 
 # ==============================
-# الإعدادات
+# إعداد الأسهم
 # ==============================
+# ضع هنا قائمة 1000 سهم أو أكثر
 symbols = [
-    "NVDA","TSLA","AAPL","AMD","META","AMZN","NFLX","SMCI","PLTR","COIN"
-    # أضف باقي الشركات هنا
+    "NIO","PLTR","AMC","SNDL","GME","BB","AAPL","NVDA","TSLA","AMD",
+    # ... أكمل حتى 1000 سهم
 ]
 
-MIN_VOLUME = 100
-ALERT_STEP = 10        # تنبيه كل 10%
-TARGET_PERCENT = 50    # الهدف 50%
-BATCH_SIZE = 50
+MIN_VOLUME = 100_000
+PRICE_MIN = 0.05
+PRICE_MAX = 10.0
+ALERT_STEP = 5
+RSI_PERIOD = 14
+EMA_PERIOD = 50
+BATCH_SIZE = 50  # عدد الأسهم لكل دفعة
 
-alerted_levels = {}
-strike_prices = {}
-targets = {}
+alerted_prices = {}
 
 # ==============================
-# التشغيل
+# دوال RSI و EMA
+# ==============================
+def compute_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.clip(lower=0)
+    loss = -1 * delta.clip(upper=0)
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_ema(prices, period=50):
+    return prices.ewm(span=period, adjust=False).mean()
+
+# ==============================
+# حلقة المراقبة
 # ==============================
 while True:
     try:
@@ -58,70 +80,69 @@ while True:
 
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
 
-        for symbol in batch_symbols:
-            stock = yf.Ticker(symbol)
-            expirations = stock.options
-            if not expirations:
-                continue
+        alerts_this_batch = []
 
-            for nearest_exp in expirations:
-                try:
-                    chain = stock.option_chain(nearest_exp)
-                except:
+        for symbol in batch_symbols:
+            try:
+                stock = yf.Ticker(symbol)
+                data = stock.history(period="60d")['Close']
+                volume_data = stock.history(period="1d")['Volume']
+
+                if data.empty or volume_data.empty:
                     continue
 
-                for opt_type, df in [("CALL", chain.calls), ("PUT", chain.puts)]:
-                    for _, row in df.iterrows():
-                        strike = row.get("strike")
-                        last_price = row.get("lastPrice")
-                        volume = row.get("volume")
+                last_price = data.iloc[-1]
+                last_volume = volume_data.iloc[-1]
 
-                        if last_price is None or strike is None or volume is None:
-                            continue
-                        if last_price <= 0 or volume < MIN_VOLUME:
-                            continue
+                if last_price < PRICE_MIN or last_price > PRICE_MAX:
+                    continue
+                if last_volume < MIN_VOLUME:
+                    continue
 
-                        contract_id = f"{symbol}-{opt_type}-{strike}-{nearest_exp}"
+                ema50 = compute_ema(data, EMA_PERIOD).iloc[-1]
+                rsi = compute_rsi(data, RSI_PERIOD).iloc[-1]
 
-                        if contract_id not in alerted_levels:
-                            alerted_levels[contract_id] = last_price
-                            strike_prices[contract_id] = strike
-                            targets[contract_id] = last_price * (1 + TARGET_PERCENT/100)
-                            continue
+                bullish = last_price > ema50 and rsi > 55
+                bearish = last_price < ema50 and rsi < 45
 
-                        base_price = alerted_levels[contract_id]
+                if symbol not in alerted_prices:
+                    alerted_prices[symbol] = last_price
+                    continue
 
-                        if base_price <= 0:
-                            continue
+                base_price = alerted_prices[symbol]
+                percent_change = ((last_price - base_price) / base_price) * 100
 
-                        percent_change = ((last_price - base_price) / base_price) * 100
+                if bullish and percent_change >= ALERT_STEP:
+                    direction = "🟢 صعود قوي"
+                elif bearish and abs(percent_change) >= ALERT_STEP:
+                    direction = "🔴 هبوط قوي"
+                else:
+                    continue
 
-                        if percent_change >= ALERT_STEP:
-
-                            direction = "🟢 عقد شراء (CALL)" if opt_type == "CALL" else "🔴 عقد بيع (PUT)"
-
-                            message = f"""
-🚀 تنبيه حركة قوية في عقد أوبشن
+                message = f"""
+{direction} في سهم
 
 🔹 السهم: {symbol}
-📌 نوع العقد: {direction}
-📅 تاريخ الانتهاء: {nearest_exp}
-🎯 سعر التنفيذ (Strike): {strike_prices[contract_id]}
-
-💰 السعر قبل الارتفاع: {base_price:.2f}$
+💰 السعر السابق: {base_price:.2f}$
 📈 السعر الحالي: {last_price:.2f}$
-📊 نسبة التغير: +{percent_change:.2f}%
-
-🏁 هدف العقد: {targets[contract_id]:.2f}$
-
-📦 حجم التداول: {int(volume):,}
+📊 نسبة التغير: {percent_change:.2f}%
+📊 RSI: {rsi:.2f}
+📈 EMA50: {ema50:.2f}
+📦 حجم التداول: {int(last_volume):,}
 """
+                alerts_this_batch.append((percent_change, message))
+                alerted_prices[symbol] = last_price
 
-                            send_telegram(message)
-                            alerted_levels[contract_id] = last_price
+            except Exception as e:
+                print(f"خطأ في السهم {symbol}: {e}")
+                continue
+
+        # إرسال التنبيهات مرتبة حسب أكبر نسبة تغير أولاً
+        for _, msg in sorted(alerts_this_batch, key=lambda x: abs(x[0]), reverse=True):
+            send_telegram(msg)
 
         time.sleep(60)
 
     except Exception as e:
-        print("خطأ:", e)
+        print("خطأ عام:", e)
         time.sleep(30)
