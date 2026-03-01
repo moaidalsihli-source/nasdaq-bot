@@ -15,7 +15,10 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID")  # مثال: @YourChannelUsername
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
+    try:
+        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
+    except Exception as e:
+        print("خطأ في تيليجرام:", e)
 
 # ==============================
 # أوقات السوق
@@ -31,17 +34,18 @@ def market_status_now():
 
     if weekday >= 5:
         return "السوق مغلق اليوم 🔴"
-    elif MARKET_OPEN <= current_time <= MARKET_CLOSE:
-        return "السوق مفتوح الآن 🟢"
     elif current_time < MARKET_OPEN:
         return "السوق سيفتح قريبًا ⏰"
+    elif MARKET_OPEN <= current_time <= MARKET_CLOSE:
+        return "السوق مفتوح الآن 🟢"
     else:
         return "السوق مغلق الآن 🔴"
 
 # ==============================
-# إرسال حالة السوق فور بدء البوت
+# رسالة جاهزية البوت عند التشغيل
 # ==============================
-send_telegram(f"🚀 البوت بدأ التشغيل ✅ | {market_status_now()}")
+send_telegram("🚀 البوت جاهز وبدأ العمل ✅")
+send_telegram(f"⏰ حالة السوق الآن: {market_status_now()}")
 
 # ==============================
 # إعداد الأسهم (يمكنك تكمل حتى 1000 سهم)
