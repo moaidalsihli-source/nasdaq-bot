@@ -107,13 +107,19 @@ while True:
                 ema50 = compute_ema(data, EMA_PERIOD).iloc[-1]
                 rsi = compute_rsi(data, RSI_PERIOD).iloc[-1]
 
-                # تحديد نوع الإشارة
+                # تحديد نوع الإشارة: صعود / هبوط / قمة / قاع
                 if last_price > ema50 and rsi > 55:
                     signal = "زخم"
                     direction = "🟢 صاعد"
                 elif last_price > data.max():
                     signal = "قمة أعلى جديدة"
                     direction = "🟢 صاعد"
+                elif last_price < ema50 and rsi < 45:
+                    signal = "هبوط"
+                    direction = "🔴 هابط"
+                elif last_price < data.min():
+                    signal = "قاع أدنى جديدة"
+                    direction = "🔴 هابط"
                 else:
                     continue
 
@@ -123,7 +129,7 @@ while True:
 
                 base_price = alerted_prices[symbol]
                 percent_change = ((last_price - base_price) / base_price) * 100
-                if percent_change < ALERT_STEP:
+                if abs(percent_change) < ALERT_STEP:
                     continue
 
                 # فوليوم لفترات 1m, 2m, 5m
@@ -135,13 +141,14 @@ while True:
                 alert_count[symbol] += 1
                 alert_number = alert_count[symbol]
 
+                # إرسال الرسالة للقناة
                 message = f"""
 RadarMom
 
 🔸 الرمز -> {symbol}
 🚨 تنبيه رقم {alert_number} اليوم
 ⚪️ الإشارة -> {signal} | {direction}
-💰 السعر -> {last_price:.2f}$ (+{percent_change:.1f}%)
+💰 السعر -> {last_price:.2f}$ ({percent_change:+.1f}%)
 📊 الفوليوم -> 1m: {int(vol_1m/1000):,}K | 2m: {int(vol_2m/1000):,}K | 5m: {int(vol_5m/1000):,}K
 """
                 send_telegram(message)
