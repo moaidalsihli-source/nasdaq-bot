@@ -2,7 +2,7 @@ import os
 import requests
 import yfinance as yf
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import pytz
 import pandas as pd
 import random
@@ -15,34 +15,34 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID")  # مثال: @YourChannelUsername
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHANNEL_ID, "text": message}
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        print("خطأ في تيليجرام:", e)
+    requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
 
 # ==============================
-# التحقق من وقت السوق
+# أوقات السوق
 # ==============================
-def market_is_open():
-    ny = pytz.timezone("America/New_York")
+ny = pytz.timezone("America/New_York")
+MARKET_OPEN = dt_time(9, 30)
+MARKET_CLOSE = dt_time(16, 0)
+
+def market_status_now():
     now = datetime.now(ny)
-    if now.weekday() >= 5:
-        return False
-    open_time = now.replace(hour=9, minute=30, second=0)
-    close_time = now.replace(hour=16, minute=0, second=0)
-    return open_time <= now <= close_time
+    weekday = now.weekday()
+    current_time = now.time()
+
+    if weekday >= 5:
+        return "السوق مغلق اليوم 🔴"
+    elif current_time < MARKET_OPEN:
+        return "السوق سيفتح قريبًا ⏰"
+    elif MARKET_OPEN <= current_time <= MARKET_CLOSE:
+        return "السوق مفتوح الآن 🟢"
+    else:
+        return "السوق مغلق الآن 🔴"
+
+# إرسال أول رسالة عند التشغيل
+send_telegram(f"🚀 البوت بدأ التشغيل ✅ | {market_status_now()}")
 
 # ==============================
-# إرسال رسالة بدء التشغيل مع حالة السوق
-# ==============================
-if market_is_open():
-    send_telegram("🚀 البوت بدأ التشغيل ✅ | السوق مفتوح الآن 🟢")
-else:
-    send_telegram("🚀 البوت بدأ التشغيل ✅ | السوق مغلق الآن 🔴")
-
-# ==============================
-# إعداد الأسهم (مثال 1000 سهم)
+# إعداد الأسهم (1000 سهم)
 # ==============================
 symbols = ["BATL","NIO","PLTR","AMC","GME","BB","NVDA","TSLA","AMD","AAPL"]
 # أكمل حتى 1000 سهم
@@ -77,10 +77,28 @@ def compute_ema(prices, period=50):
     return prices.ewm(span=period, adjust=False).mean()
 
 # ==============================
+# إرسال تحديث حالة السوق كل ساعة
+# ==============================
+last_market_alert = None  # لتجنب تكرار نفس الرسالة
+
+def check_market_alert():
+    global last_market_alert
+    status = market_status_now()
+    open_now = "مفتوح" in status
+    closed_now = "مغلق" in status or "سيفتح" in status
+
+    if last_market_alert != status:
+        send_telegram(f"⏰ تحديث: {status}")
+        last_market_alert = status
+
+# ==============================
 # تشغيل المراقبة
 # ==============================
 while True:
     try:
+        # تحقق حالة السوق
+        check_market_alert()
+
         batch_symbols = random.sample(symbols, min(BATCH_SIZE, len(symbols)))
 
         for symbol in batch_symbols:
@@ -143,7 +161,7 @@ RadarMom
                 print(f"خطأ في السهم {symbol}: {e}")
                 continue
 
-        time.sleep(60)
+        time.sleep(60)  # تحقق كل دقيقة
 
     except Exception as e:
         print("خطأ عام:", e)
